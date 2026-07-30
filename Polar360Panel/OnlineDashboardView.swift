@@ -7,13 +7,23 @@ struct OnlineDashboardView: View {
     @StateObject private var slot2 = SensorSlotViewModel(slotIndex: 1, mode: .online)
     @StateObject private var slot3 = SensorSlotViewModel(slotIndex: 2, mode: .online)
     @StateObject private var slot4 = SensorSlotViewModel(slotIndex: 3, mode: .online)
+    @AppStorage("onlineGridColumns") private var gridColumns: Int = 2
     @State private var showUsageGuide = false
     @State private var showModeChangeConfirmation = false
+
+    private var slots: [SensorSlotViewModel] { [slot1, slot2, slot3, slot4] }
+
+    /// slotsをgridColumns列ずつの行に分割する
+    private var rows: [[SensorSlotViewModel]] {
+        stride(from: 0, to: slots.count, by: gridColumns).map {
+            Array(slots[$0..<min($0 + gridColumns, slots.count)])
+        }
+    }
 
     var body: some View {
         VStack(spacing: 6) {
             HStack {
-                Text("オンラインモード").font(.subheadline).bold()
+                Text("オンラインモード(最大4台・\(gridColumns)列)").font(.subheadline).bold()
                 Spacer()
                 Button {
                     showUsageGuide = true
@@ -26,22 +36,27 @@ struct OnlineDashboardView: View {
                 }
                 .font(.caption)
             }
-            HStack(spacing: 6) {
-                OnlineSensorPanelView(viewModel: slot1)
-                OnlineSensorPanelView(viewModel: slot2)
-            }
-            HStack(spacing: 6) {
-                OnlineSensorPanelView(viewModel: slot3)
-                OnlineSensorPanelView(viewModel: slot4)
+            ScrollView {
+                Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+                    ForEach(rows.indices, id: \.self) { rowIndex in
+                        GridRow {
+                            ForEach(0..<gridColumns, id: \.self) { colIndex in
+                                if colIndex < rows[rowIndex].count {
+                                    OnlineSensorPanelView(viewModel: rows[rowIndex][colIndex])
+                                        .frame(maxWidth: .infinity)
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         .padding(6)
         .background(Color(.systemGroupedBackground))
         .onAppear {
-            slot1.autoReconnectIfPossible()
-            slot2.autoReconnectIfPossible()
-            slot3.autoReconnectIfPossible()
-            slot4.autoReconnectIfPossible()
+            slots.forEach { $0.autoReconnectIfPossible() }
         }
         .sheet(isPresented: $showUsageGuide) {
             UsageGuideView()
@@ -57,7 +72,7 @@ struct OnlineDashboardView: View {
     }
 
     private func requestChangeMode() {
-        let anyMeasuring = [slot1, slot2, slot3, slot4].contains { $0.state == .connected }
+        let anyMeasuring = slots.contains { $0.state == .connected }
         if anyMeasuring {
             showModeChangeConfirmation = true
         } else {
@@ -66,7 +81,7 @@ struct OnlineDashboardView: View {
     }
 
     private func disconnectAllAndChangeMode() {
-        [slot1, slot2, slot3, slot4].forEach { $0.disconnectAndForget() }
+        slots.forEach { $0.disconnectAndForget() }
         onChangeMode()
     }
 }

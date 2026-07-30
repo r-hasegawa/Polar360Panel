@@ -39,6 +39,28 @@ struct AccPoint: Identifiable, Equatable {
     let z: Int32
 }
 
+/// 「計測終了」処理の、今どの工程にいるかを表す。
+enum OfflineStopPhase: Equatable {
+    case idle
+    case stoppingRecording
+    case fetchingEntry(type: String)
+    case savingCsv(type: String)
+    case erasingMemory(type: String)
+    case done
+}
+
+/// データ種別ごとの取得進捗。
+struct TypeProgress: Equatable {
+    var completedCount: Int = 0
+    var totalCount: Int = 0
+    var currentPercent: Int = 0
+
+    /// 表示用の「今何個目」(1始まり、totalCountを超えない)
+    var displayIndex: Int {
+        totalCount == 0 ? 0 : min(completedCount + 1, totalCount)
+    }
+}
+
 /// 切断が「何によって起きたか」を区別するための内部フラグ。
 private enum DisconnectReason {
     case none              // ユーザー操作によらない(電波切れ等) = 予期しない切断
@@ -58,7 +80,19 @@ struct DiskCheckpoint: Codable, Equatable {
 /// PolarBleApiのobserverには自分自身はならず、PolarManagerからの通知(handle*)を受けて状態遷移する。
 /// SDK 8.x では各種ストリーミングAPIが AsyncThrowingStream を返すため、
 /// RxSwiftではなく Task + for-await-in で処理する。
-final class SensorSlotViewModel: ObservableObject, Identifiable {
+/// SensorSlotViewModel(4分割パネル用)と、SensorInfoChecker(センサー管理画面の
+/// 単発情報確認用)の両方が、PolarManagerからのコールバックを受け取れるようにするための
+/// 共通プロトコル。
+@MainActor
+protocol PolarDeviceEventReceiver: AnyObject {
+    var batteryLevel: Int? { get set }
+    func handleConnecting()
+    func handleConnected()
+    func handleDisconnected(pairingError: Bool)
+    func handleFeatureReady(_ feature: PolarBleSdkFeature)
+}
+
+final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEventReceiver {
 
     let id = UUID()
     let slotIndex: Int
@@ -76,6 +110,10 @@ final class SensorSlotViewModel: ObservableObject, Identifiable {
     @Published var diskCheckpoint: DiskCheckpoint?
     @Published var diskConsumptionRateBytesPerSecond: Double?
     @Published var isSyncing: Bool = false
+    @Published var stopPhase: OfflineStopPhase = .idle
+    @Published var hrProgress = TypeProgress()
+    @Published var skinTempProgress = TypeProgress()
+    @Published var accProgress = TypeProgress()
     @Published var lastSyncSummary: String?
     @Published var mode: SensorMode
     @Published var offlineRecordingConflictDetected: Bool = false
@@ -362,6 +400,14 @@ final class SensorSlotViewModel: ObservableObject, Identifiable {
         guard let deviceId else { return }
         state = .connected
         csvLogger?.logEvent("measurement_started skinTempHz=\(selectedSkinTempRateHz) accHz=\(selectedAccRateHz)")
+        if mode == .offline {
+            LastMeasurementSettingsStore.shared.record(
+                deviceId: deviceId,
+                skinTempHz: selectedSkinTempRateHz,
+                accHz: selectedAccRateHz,
+                measureAcc: measureAcc
+            )
+        }
         startStreams(deviceId: deviceId)
         Task { @MainActor [weak self] in
             await self?.updateDiskSpaceEstimate(deviceId: deviceId)
@@ -730,8 +776,8 @@ final class SensorSlotViewModel: ObservableObject, Identifiable {
     // HR/体表温/加速度と同じ要領(Cmdクリックでジャンプ)で実物を確認してから実装すること。
     // ここではUI側の受け口だけ用意し、中身は未実装。
 
-    /// 記録の停止は呼び出し側の責任。一覧取得→取得→CSV保存→削除だけを行い、
-    /// 結果のサマリー情報を返す。syncOfflineData/stopMeasurement両方から使う。
+    /// 記録の停止は呼び出し側の責任。一覧取得→(進捗付き)取得→CSV保存→削除を行い、
+    /// 結果のサマリー情報を返す。途中経過はstopPhase/hrProgress等のPublishedプロパティに反映する。
     @MainActor
     private func fetchAndSaveAllOfflineEntries(deviceId: String) async -> (successCount: Int, failCount: Int, tally: [String: Int], earliest: Date?, latest: Date?) {
         var successCount = 0
@@ -750,26 +796,85 @@ final class SensorSlotViewModel: ObservableObject, Identifiable {
             }
             entries.sort { $0.date < $1.date }
 
+            // 種類ごとの合計件数を先に数えておく(「(1/2件)」のような表示のため)
+            hrProgress = TypeProgress(totalCount: entries.filter { $0.type == .hr }.count)
+            skinTempProgress = TypeProgress(totalCount: entries.filter { $0.type == .skinTemperature }.count)
+            accProgress = TypeProgress(totalCount: entries.filter { $0.type == .acc }.count)
+
             for entry in entries {
+                let typeLabel = displayLabel(for: entry.type)
                 do {
-                    let data = try await api.getOfflineRecord(deviceId, entry: entry, secret: nil)
+                    stopPhase = .fetchingEntry(type: typeLabel)
+                    var finalData: PolarOfflineRecordingData?
+                    for try await progressResult in api.getOfflineRecordWithProgress(deviceId, entry: entry, secret: nil) {
+                        switch progressResult {
+                        case .progress(let progress):
+                            setCurrentPercent(for: entry.type, percent: progress.progressPercent)
+                        case .complete(let data):
+                            finalData = data
+                        }
+                    }
+                    guard let data = finalData else {
+                        throw NSError(domain: "Polar360Panel", code: -1, userInfo: [NSLocalizedDescriptionKey: "データが空でした"])
+                    }
+
+                    stopPhase = .savingCsv(type: typeLabel)
                     let result = saveOfflineRecordingData(data)
                     tally[result.label, default: 0] += result.count
                     if let first = result.first, earliest == nil || first < earliest! { earliest = first }
                     if let last = result.last, latest == nil || last > latest! { latest = last }
+
+                    stopPhase = .erasingMemory(type: typeLabel)
                     try await api.removeOfflineRecord(deviceId, entry: entry)
                     csvLogger?.logEvent("offline_synced_removed path=\(entry.path) type=\(result.label) count=\(result.count)")
                     successCount += 1
+                    advanceProgress(for: entry.type)
                 } catch {
                     print("[Offline] fetch/remove failed for \(entry.path): \(error)")
                     csvLogger?.logEvent("offline_sync_entry_failed path=\(entry.path)")
                     failCount += 1
+                    advanceProgress(for: entry.type)
                 }
             }
         } catch {
             print("[Offline] listOfflineRecordings failed: \(error)")
         }
+        stopPhase = .done
         return (successCount, failCount, tally, earliest, latest)
+    }
+
+    private func displayLabel(for type: PolarDeviceDataType) -> String {
+        switch type {
+        case .hr: return "HR"
+        case .skinTemperature: return "体表温"
+        case .acc: return "加速度"
+        default: return "\(type)"
+        }
+    }
+
+    private func setCurrentPercent(for type: PolarDeviceDataType, percent: Int) {
+        switch type {
+        case .hr: hrProgress.currentPercent = percent
+        case .skinTemperature: skinTempProgress.currentPercent = percent
+        case .acc: accProgress.currentPercent = percent
+        default: break
+        }
+    }
+
+    /// 1件分の処理(成功・失敗問わず)が終わった時に呼び、完了数を進める。
+    private func advanceProgress(for type: PolarDeviceDataType) {
+        switch type {
+        case .hr:
+            hrProgress.completedCount += 1
+            hrProgress.currentPercent = 0
+        case .skinTemperature:
+            skinTempProgress.completedCount += 1
+            skinTempProgress.currentPercent = 0
+        case .acc:
+            accProgress.completedCount += 1
+            accProgress.currentPercent = 0
+        default: break
+        }
     }
 
     private func buildSyncSummary(successCount: Int, failCount: Int, tally: [String: Int], earliest: Date?, latest: Date?) -> String {
@@ -858,6 +963,33 @@ final class SensorSlotViewModel: ObservableObject, Identifiable {
     /// 別の相手(元のサードパーティアプリ等)と組ませ直したい場合は、
     /// 本体側のファクトリーリセット、および必要ならiOS設定アプリ側の
     /// Bluetoothペアリング情報削除もあわせて案内すること。
+    /// 接続中(connecting/settingUp/configuring)に、途中で止められなくなった時に使う。
+    /// 同じセンサーを別のパネルでも選んでしまった場合など、コールバックが正しい相手に
+    /// 届かなくなって「ぐるぐる」から戻れなくなるケースの回避策として使う。
+    func cancelConnection() {
+        ftuTask?.cancel()
+        stopAllStreams()
+        if let deviceId {
+            disconnectReason = .userDisconnect
+            csvLogger?.logEvent("connection_cancelled_by_user")
+            do {
+                try api.disconnectFromDevice(deviceId)
+            } catch {
+                print("[Cancel] disconnectFromDevice failed(無視可): \(error)")
+            }
+            PolarManager.shared.unregister(deviceId: deviceId)
+            UserDefaults.standard.removeObject(forKey: lastDeviceIdKey)
+            UserDefaults.standard.removeObject(forKey: lastDeviceNameKey)
+        }
+        self.deviceId = nil
+        self.deviceName = ""
+        self.errorMessage = nil
+        self.batteryLevel = nil
+        csvLogger?.closeAccFile()
+        self.csvLogger = nil
+        self.state = .idle
+    }
+
     func disconnectAndForget() {
         guard let deviceId else { return }
         disconnectReason = .userDisconnect
@@ -891,10 +1023,17 @@ final class SensorSlotViewModel: ObservableObject, Identifiable {
     func stopMeasurement() {
         guard let deviceId else { return }
         isSyncing = true
+        stopPhase = .stoppingRecording
+        hrProgress = TypeProgress()
+        skinTempProgress = TypeProgress()
+        accProgress = TypeProgress()
         csvLogger?.logEvent("measurement_stop_requested")
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.isSyncing = false }
+            defer {
+                self.isSyncing = false
+                self.stopPhase = .idle
+            }
             for feature: PolarDeviceDataType in [.hr, .skinTemperature, .acc] {
                 do {
                     try await self.api.stopOfflineRecording(deviceId, feature: feature)

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ModeSelectionView: View {
     let onSelect: (SensorMode) -> Void
+    @AppStorage("onlineGridColumns") private var onlineGridColumns: Int = 2
+    @AppStorage("offlineGridColumns") private var offlineGridColumns: Int = 2
     @State private var showUsageGuide = false
     @State private var showSensorManagement = false
     @State private var showDataManagement = false
@@ -12,19 +14,25 @@ struct ModeSelectionView: View {
                 .font(.title)
                 .bold()
 
-            HStack(spacing: 24) {
-                modeButton(
-                    mode: .online,
-                    title: "オンラインモード",
-                    description: "体表温・加速度をリアルタイム表示\n(グラフ中心、切断中の記録なし)",
-                    color: .blue
-                )
-                modeButton(
-                    mode: .offline,
-                    title: "オフラインモード",
-                    description: "センサー内蔵メモリに常時記録\n(データ保全・メモリ残量中心)",
-                    color: .green
-                )
+            HStack(alignment: .top, spacing: 24) {
+                VStack(spacing: 8) {
+                    modeButton(
+                        mode: .online,
+                        title: "オンラインモード",
+                        description: "体表温・加速度をリアルタイム表示\n(グラフ中心、切断中の記録なし)\n最大4台まで",
+                        color: .blue
+                    )
+                    columnPicker(title: "列数", selection: $onlineGridColumns)
+                }
+                VStack(spacing: 8) {
+                    modeButton(
+                        mode: .offline,
+                        title: "オフラインモード",
+                        description: "センサー内蔵メモリに常時記録\n(データ保全・メモリ残量中心)\n台数の上限なし",
+                        color: .green
+                    )
+                    columnPicker(title: "列数", selection: $offlineGridColumns)
+                }
             }
 
             HStack(spacing: 16) {
@@ -62,6 +70,17 @@ struct ModeSelectionView: View {
         .sheet(isPresented: $showDataManagement) {
             DataManagementView()
         }
+    }
+
+    @ViewBuilder
+    private func columnPicker(title: String, selection: Binding<Int>) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(1...4, id: \.self) { count in
+                Text("\(count)列").tag(count)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 320)
     }
 
     @ViewBuilder

@@ -84,10 +84,20 @@ struct OnlineSensorPanelView: View {
             .buttonStyle(.borderedProminent)
 
         case .connecting:
-            ProgressView("接続中...")
+            VStack(spacing: 8) {
+                ProgressView("接続中...")
+                Button("キャンセル") { viewModel.cancelConnection() }
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
         case .settingUp:
-            ProgressView("初期設定中...")
+            VStack(spacing: 8) {
+                ProgressView("初期設定中...")
+                Button("キャンセル") { viewModel.cancelConnection() }
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
         case .configuring:
             measurementSettingsView
@@ -199,6 +209,9 @@ struct OnlineSensorPanelView: View {
                     viewModel.confirmMeasurementSettings()
                 }
                 .buttonStyle(.borderedProminent)
+                Button("キャンセル") { viewModel.cancelConnection() }
+                    .font(.caption)
+                    .foregroundColor(.red)
             }
         }
         .font(.caption)
@@ -274,7 +287,7 @@ struct OnlineSensorPanelView: View {
     @ViewBuilder
     private var deviceListSheet: some View {
         NavigationView {
-            List(manager.discoveredDevices, id: \.deviceId) { device in
+            List(manager.discoveredDevices.filter { !PolarManager.shared.isDeviceActive($0.deviceId) }, id: \.deviceId) { device in
                 Button {
                     manager.stopScan()
                     showDeviceList = false

@@ -20,7 +20,7 @@ final class PolarManager: NSObject, ObservableObject,
     @Published var isBluetoothOn: Bool = false
 
     // deviceId -> 対応するパネルのViewModel
-    private var slots: [String: SensorSlotViewModel] = [:]
+    private var slots: [String: PolarDeviceEventReceiver] = [:]
 
     private var scanTask: Task<Void, Never>?
 
@@ -46,7 +46,7 @@ final class PolarManager: NSObject, ObservableObject,
 
     // MARK: - 登録/解除
 
-    func register(slot: SensorSlotViewModel, forDeviceId deviceId: String) {
+    func register(slot: PolarDeviceEventReceiver, forDeviceId deviceId: String) {
         slots[deviceId] = slot
     }
 

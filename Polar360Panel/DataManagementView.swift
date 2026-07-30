@@ -32,6 +32,8 @@ struct DataManagementView: View {
 private struct DeviceFolderListView: View {
     let modeFolder: String
     @State private var deviceFolders: [String] = []
+    @State private var pendingDeleteOffsets: IndexSet?
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         List {
@@ -43,12 +45,26 @@ private struct DeviceFolderListView: View {
                         SessionListView(modeFolder: modeFolder, deviceFolder: folder)
                     }
                 }
-                .onDelete(perform: deleteFolders)
+                .onDelete { offsets in
+                    pendingDeleteOffsets = offsets
+                    showDeleteConfirm = true
+                }
             }
         }
         .navigationTitle(modeFolder == "Online" ? "オンライン" : "オフライン")
         .onAppear {
             deviceFolders = DataFileScanner.deviceFolders(modeFolder: modeFolder)
+        }
+        .alert("このセンサーのデータを削除しますか?", isPresented: $showDeleteConfirm) {
+            Button("キャンセル", role: .cancel) { pendingDeleteOffsets = nil }
+            Button("削除する", role: .destructive) {
+                if let offsets = pendingDeleteOffsets {
+                    deleteFolders(at: offsets)
+                }
+                pendingDeleteOffsets = nil
+            }
+        } message: {
+            Text("保存されているすべてのセッションのデータが削除されます。この操作は元に戻せません。")
         }
     }
 
@@ -67,6 +83,8 @@ private struct SessionListView: View {
     let modeFolder: String
     let deviceFolder: String
     @State private var sessions: [SessionFileGroup] = []
+    @State private var pendingDeleteOffsets: IndexSet?
+    @State private var showDeleteConfirm = false
 
     private static let displayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -93,11 +111,25 @@ private struct SessionListView: View {
                         }
                     }
                 }
-                .onDelete(perform: deleteSessions)
+                .onDelete { offsets in
+                    pendingDeleteOffsets = offsets
+                    showDeleteConfirm = true
+                }
             }
         }
         .navigationTitle(deviceFolder)
         .onAppear(perform: reload)
+        .alert("このセッションのデータを削除しますか?", isPresented: $showDeleteConfirm) {
+            Button("キャンセル", role: .cancel) { pendingDeleteOffsets = nil }
+            Button("削除する", role: .destructive) {
+                if let offsets = pendingDeleteOffsets {
+                    deleteSessions(at: offsets)
+                }
+                pendingDeleteOffsets = nil
+            }
+        } message: {
+            Text("このセッションに含まれるすべてのファイル(HR・体表温・加速度・イベントログ)が削除されます。この操作は元に戻せません。")
+        }
     }
 
     private func reload() {
@@ -126,6 +158,8 @@ private struct SessionDetailView: View {
     let session: SessionFileGroup
     let onChanged: () -> Void
     @State private var files: [DataFileEntry]
+    @State private var pendingDeleteOffsets: IndexSet?
+    @State private var showDeleteConfirm = false
 
     init(session: SessionFileGroup, onChanged: @escaping () -> Void) {
         self.session = session
@@ -148,9 +182,23 @@ private struct SessionDetailView: View {
                     }
                 }
             }
-            .onDelete(perform: deleteFiles)
+            .onDelete { offsets in
+                pendingDeleteOffsets = offsets
+                showDeleteConfirm = true
+            }
         }
         .navigationTitle(session.sessionLabel)
+        .alert("このファイルを削除しますか?", isPresented: $showDeleteConfirm) {
+            Button("キャンセル", role: .cancel) { pendingDeleteOffsets = nil }
+            Button("削除する", role: .destructive) {
+                if let offsets = pendingDeleteOffsets {
+                    deleteFiles(at: offsets)
+                }
+                pendingDeleteOffsets = nil
+            }
+        } message: {
+            Text("この操作は元に戻せません。")
+        }
     }
 
     private func deleteFiles(at offsets: IndexSet) {

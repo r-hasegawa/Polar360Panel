@@ -1,0 +1,16 @@
+{
+  "name": "Polar360Panel App Source",
+  "identifier": "com.r-hasegawa.source",
+  "apps": [
+    {
+      "name": "Polar360Panel",
+      "bundleIdentifier": "com.r-hasegawa.Polar360Panel",
+      "developerName": "r-hasegawa",
+      "version": "1.0.0",
+      "versionDate": "2026-07-30T00:00:00Z",
+      "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.0.0/Polar360Panel.ipa",
+      "localizedDescription": "Polar360Panel アプリケーション",
+      "iconURL": "https://raw.githubusercontent.com/r-hasegawa/Polar360Panel/main/AppIcon.png"
+    }
+  ]
+}

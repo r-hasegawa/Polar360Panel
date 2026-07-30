@@ -5,6 +5,9 @@ struct OfflineSensorPanelView: View {
     @ObservedObject var viewModel: SensorSlotViewModel
     @ObservedObject private var manager = PolarManager.shared
     @State private var showDeviceList = false
+    /// 台数を可変にできるオフラインモード専用。未接続時にこのパネル自体を
+    /// 削除したい時に呼ばれる(nilならボタンを出さない=オンライン側では未使用)。
+    var onRemove: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -62,6 +65,15 @@ struct OfflineSensorPanelView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            if viewModel.state == .idle, let onRemove {
+                Button {
+                    onRemove()
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.borderless)
+            }
         }
     }
 
@@ -78,10 +90,20 @@ struct OfflineSensorPanelView: View {
             .buttonStyle(.borderedProminent)
 
         case .connecting:
-            ProgressView("接続中...")
+            VStack(spacing: 8) {
+                ProgressView("接続中...")
+                Button("キャンセル") { viewModel.cancelConnection() }
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
         case .settingUp:
-            ProgressView("初期設定中...")
+            VStack(spacing: 8) {
+                ProgressView("初期設定中...")
+                Button("キャンセル") { viewModel.cancelConnection() }
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
         case .configuring:
             measurementSettingsView
@@ -116,16 +138,19 @@ struct OfflineSensorPanelView: View {
                     if viewModel.isSyncing {
                         HStack(spacing: 4) {
                             ProgressView().scaleEffect(0.6)
-                            Text("データ取得中...")
+                            Text(phaseText(viewModel.stopPhase))
                         }
+                        progressRow(label: "HR", progress: viewModel.hrProgress)
+                        progressRow(label: "体表温", progress: viewModel.skinTempProgress)
+                        progressRow(label: "加速度", progress: viewModel.accProgress)
                     } else if let summary = viewModel.lastSyncSummary {
                         Text(summary).foregroundColor(.green)
-                    }
-                    if let date = viewModel.lastOfflineSyncDate {
-                        Text("前回の取得 \(date.formatted(date: .omitted, time: .shortened))")
-                            .foregroundColor(.secondary)
+                        if let date = viewModel.lastOfflineSyncDate {
+                            Text("前回の取得 \(date.formatted(date: .omitted, time: .shortened))")
+                                .foregroundColor(.secondary)
+                        }
                     } else {
-                        Text("まだ計測終了していません(記録は継続中)").foregroundColor(.secondary)
+                        Text("記録中(まだ計測終了していません)").foregroundColor(.secondary)
                     }
                 }
                 .font(.caption)
@@ -233,10 +258,38 @@ struct OfflineSensorPanelView: View {
                     viewModel.confirmMeasurementSettings()
                 }
                 .buttonStyle(.borderedProminent)
+                Button("キャンセル") { viewModel.cancelConnection() }
+                    .font(.caption)
+                    .foregroundColor(.red)
             }
         }
         .font(.caption)
         .padding(.horizontal, 8)
+    }
+
+    private func phaseText(_ phase: OfflineStopPhase) -> String {
+        switch phase {
+        case .idle: return ""
+        case .stoppingRecording: return "記録停止中..."
+        case .fetchingEntry(let type): return "データ取得中...(\(type))"
+        case .savingCsv(let type): return "CSVに保存中...(\(type))"
+        case .erasingMemory(let type): return "内蔵メモリ消去中...(\(type))"
+        case .done: return "完了"
+        }
+    }
+
+    @ViewBuilder
+    private func progressRow(label: String, progress: TypeProgress) -> some View {
+        if progress.totalCount > 0 {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(progress.completedCount >= progress.totalCount ? Color.green : Color.gray)
+                    .frame(width: 6, height: 6)
+                Text("\(label) (\(progress.displayIndex)/\(progress.totalCount)件) \(progress.currentPercent)%")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
     }
 
     private func formattedPercent(_ checkpoint: DiskCheckpoint) -> String {
@@ -282,7 +335,7 @@ struct OfflineSensorPanelView: View {
     @ViewBuilder
     private var deviceListSheet: some View {
         NavigationView {
-            List(manager.discoveredDevices, id: \.deviceId) { device in
+            List(manager.discoveredDevices.filter { !PolarManager.shared.isDeviceActive($0.deviceId) }, id: \.deviceId) { device in
                 Button {
                     manager.stopScan()
                     showDeviceList = false

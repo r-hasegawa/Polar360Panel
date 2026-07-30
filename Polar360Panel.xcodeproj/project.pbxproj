@@ -21,6 +21,9 @@
 		50A05BC930199A22006E93DF /* CsvDataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BC830199A22006E93DF /* CsvDataLoader.swift */; };
 		50A05BCB30199A4F006E93DF /* StoredDataGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BCA30199A4F006E93DF /* StoredDataGraphView.swift */; };
 		50A05BCD30199A6D006E93DF /* DataManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BCC30199A6D006E93DF /* DataManagementView.swift */; };
+		50A05BCF301AD92A006E93DF /* SensorInfoChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BCE301AD92A006E93DF /* SensorInfoChecker.swift */; };
+		50A05BD1301AD99A006E93DF /* LastMeasurementSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BD0301AD99A006E93DF /* LastMeasurementSettingsStore.swift */; };
+		50A05BD3301AE64A006E93DF /* SensorMemoryEraser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BD2301AE64A006E93DF /* SensorMemoryEraser.swift */; };
 		50C877B0301272AF00C7C0CB /* Polar360PanelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C877AF301272AF00C7C0CB /* Polar360PanelApp.swift */; };
 		50C877B2301272AF00C7C0CB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C877B1301272AF00C7C0CB /* ContentView.swift */; };
 		50C877B4301272B100C7C0CB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C877B3301272B100C7C0CB /* Assets.xcassets */; };
@@ -43,6 +46,9 @@
 		50A05BC830199A22006E93DF /* CsvDataLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CsvDataLoader.swift; sourceTree = "<group>"; };
 		50A05BCA30199A4F006E93DF /* StoredDataGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredDataGraphView.swift; sourceTree = "<group>"; };
 		50A05BCC30199A6D006E93DF /* DataManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataManagementView.swift; sourceTree = "<group>"; };
+		50A05BCE301AD92A006E93DF /* SensorInfoChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorInfoChecker.swift; sourceTree = "<group>"; };
+		50A05BD0301AD99A006E93DF /* LastMeasurementSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastMeasurementSettingsStore.swift; sourceTree = "<group>"; };
+		50A05BD2301AE64A006E93DF /* SensorMemoryEraser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorMemoryEraser.swift; sourceTree = "<group>"; };
 		50C877AC301272AF00C7C0CB /* Polar360Panel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Polar360Panel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		50C877AF301272AF00C7C0CB /* Polar360PanelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Polar360PanelApp.swift; sourceTree = "<group>"; };
 		50C877B1301272AF00C7C0CB /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -116,6 +122,9 @@
 				50A05BC830199A22006E93DF /* CsvDataLoader.swift */,
 				50A05BCA30199A4F006E93DF /* StoredDataGraphView.swift */,
 				50A05BCC30199A6D006E93DF /* DataManagementView.swift */,
+				50A05BCE301AD92A006E93DF /* SensorInfoChecker.swift */,
+				50A05BD0301AD99A006E93DF /* LastMeasurementSettingsStore.swift */,
+				50A05BD2301AE64A006E93DF /* SensorMemoryEraser.swift */,
 			);
 			path = Polar360Panel;
 			sourceTree = "<group>";
@@ -211,6 +220,7 @@
 				50C877B2301272AF00C7C0CB /* ContentView.swift in Sources */,
 				50C877C43012759A00C7C0CB /* PolarManager.swift in Sources */,
 				50C877C53012759A00C7C0CB /* CsvLogger.swift in Sources */,
+				50A05BD3301AE64A006E93DF /* SensorMemoryEraser.swift in Sources */,
 				50C877C73012759A00C7C0CB /* OfflineSensorPanelView.swift in Sources */,
 				50A05BBD30172F38006E93DF /* OfflineDashboardView.swift in Sources */,
 				50A05BBB30172F24006E93DF /* OnlineDashboardView.swift in Sources */,
@@ -220,10 +230,12 @@
 				50A05BC530198737006E93DF /* SensorManagementView.swift in Sources */,
 				50A05BC7301999FE006E93DF /* DataFileScanner.swift in Sources */,
 				50A05BC33019870B006E93DF /* SensorNicknameStore.swift in Sources */,
+				50A05BD1301AD99A006E93DF /* LastMeasurementSettingsStore.swift in Sources */,
 				50A05BCB30199A4F006E93DF /* StoredDataGraphView.swift in Sources */,
 				50C877C63012759A00C7C0CB /* SensorSlotViewModel.swift in Sources */,
 				50C877B0301272AF00C7C0CB /* Polar360PanelApp.swift in Sources */,
 				50A05BC930199A22006E93DF /* CsvDataLoader.swift in Sources */,
+				50A05BCF301AD92A006E93DF /* SensorInfoChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -358,9 +370,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Polar360Panel/Preview Content\"";
+				DEVELOPMENT_TEAM = 7GXWX4Y3BG;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Polar360Panel/Info.plist;
@@ -376,8 +390,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = mspa.Polar360Panel;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.r-hasegawa.Polar360Panel";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -392,9 +407,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Polar360Panel/Preview Content\"";
+				DEVELOPMENT_TEAM = 7GXWX4Y3BG;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Polar360Panel/Info.plist;
@@ -410,8 +427,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = mspa.Polar360Panel;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.r-hasegawa.Polar360Panel";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;

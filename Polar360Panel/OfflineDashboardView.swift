@@ -3,18 +3,32 @@ import SwiftUI
 struct OfflineDashboardView: View {
     let onChangeMode: () -> Void
 
-    @StateObject private var slot1 = SensorSlotViewModel(slotIndex: 0, mode: .offline)
-    @StateObject private var slot2 = SensorSlotViewModel(slotIndex: 1, mode: .offline)
-    @StateObject private var slot3 = SensorSlotViewModel(slotIndex: 2, mode: .offline)
-    @StateObject private var slot4 = SensorSlotViewModel(slotIndex: 3, mode: .offline)
+    @AppStorage("offlineGridColumns") private var gridColumns: Int = 2
+    @State private var slots: [SensorSlotViewModel] = []
+    @State private var nextSlotIndex: Int = 0
     @State private var showUsageGuide = false
     @State private var showModeChangeConfirmation = false
+
+    private let slotIndicesKey = "offlineSlotIndices"
+
+    /// slotsをgridColumns列ずつの行に分割する
+    private var rows: [[SensorSlotViewModel]] {
+        stride(from: 0, to: slots.count, by: gridColumns).map {
+            Array(slots[$0..<min($0 + gridColumns, slots.count)])
+        }
+    }
 
     var body: some View {
         VStack(spacing: 6) {
             HStack {
-                Text("オフラインモード").font(.subheadline).bold()
+                Text("オフラインモード(\(slots.count)台・\(gridColumns)列)").font(.subheadline).bold()
                 Spacer()
+                Button {
+                    addSlot()
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .font(.caption)
                 Button {
                     showUsageGuide = true
                 } label: {
@@ -26,22 +40,32 @@ struct OfflineDashboardView: View {
                 }
                 .font(.caption)
             }
-            HStack(spacing: 6) {
-                OfflineSensorPanelView(viewModel: slot1)
-                OfflineSensorPanelView(viewModel: slot2)
-            }
-            HStack(spacing: 6) {
-                OfflineSensorPanelView(viewModel: slot3)
-                OfflineSensorPanelView(viewModel: slot4)
+            ScrollView {
+                Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+                    ForEach(rows.indices, id: \.self) { rowIndex in
+                        GridRow {
+                            ForEach(0..<gridColumns, id: \.self) { colIndex in
+                                if colIndex < rows[rowIndex].count {
+                                    let slot = rows[rowIndex][colIndex]
+                                    OfflineSensorPanelView(viewModel: slot) {
+                                        removeSlot(slot)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         .padding(6)
         .background(Color(.systemGroupedBackground))
         .onAppear {
-            slot1.autoReconnectIfPossible()
-            slot2.autoReconnectIfPossible()
-            slot3.autoReconnectIfPossible()
-            slot4.autoReconnectIfPossible()
+            if slots.isEmpty {
+                loadOrCreateInitialSlots()
+            }
         }
         .sheet(isPresented: $showUsageGuide) {
             UsageGuideView()
@@ -56,8 +80,34 @@ struct OfflineDashboardView: View {
         }
     }
 
+    private func loadOrCreateInitialSlots() {
+        let saved = UserDefaults.standard.array(forKey: slotIndicesKey) as? [Int] ?? []
+        let indices = saved.isEmpty ? [0, 1, 2, 3] : saved
+        slots = indices.map { SensorSlotViewModel(slotIndex: $0, mode: .offline) }
+        slots.forEach { $0.autoReconnectIfPossible() }
+        nextSlotIndex = (indices.max() ?? -1) + 1
+        persistSlotIndices()
+    }
+
+    private func persistSlotIndices() {
+        UserDefaults.standard.set(slots.map { $0.slotIndex }, forKey: slotIndicesKey)
+    }
+
+    private func addSlot() {
+        let newSlot = SensorSlotViewModel(slotIndex: nextSlotIndex, mode: .offline)
+        nextSlotIndex += 1
+        slots.append(newSlot)
+        persistSlotIndices()
+    }
+
+    private func removeSlot(_ slot: SensorSlotViewModel) {
+        guard slot.state == .idle else { return } // 念のため、未接続時だけ削除可能
+        slots.removeAll { $0.id == slot.id }
+        persistSlotIndices()
+    }
+
     private func requestChangeMode() {
-        let anyMeasuring = [slot1, slot2, slot3, slot4].contains { $0.state == .connected }
+        let anyMeasuring = slots.contains { $0.state == .connected }
         if anyMeasuring {
             showModeChangeConfirmation = true
         } else {
@@ -66,7 +116,7 @@ struct OfflineDashboardView: View {
     }
 
     private func disconnectAllAndChangeMode() {
-        [slot1, slot2, slot3, slot4].forEach { $0.disconnectAndForget() }
+        slots.forEach { $0.disconnectAndForget() }
         onChangeMode()
     }
 }

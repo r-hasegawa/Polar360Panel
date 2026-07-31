@@ -138,6 +138,13 @@ struct OnlineSensorPanelView: View {
                 }
             }
 
+        case .pendingOfflineData:
+            // オフラインモード専用の状態(以前の未取得データの確認)だが、
+            // SlotStateを共有しているため網羅のために用意している。オンライン側では起こらない。
+            Text("未取得データの確認(オフラインモード専用の状態です)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
         case .unexpectedDisconnect(let message):
             VStack(spacing: 8) {
                 Image(systemName: "wifi.exclamationmark")

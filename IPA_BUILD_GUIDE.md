@@ -39,6 +39,8 @@
 4. 生成された **`Payload.zip`** の名前を **`Polar360Panel.ipa`** に変更します。
    - 拡張子変更の確認ダイアログが出た場合は「`.ipa` を使用」を選択します。
 
+⚠️ **Kekaなど他の圧縮ツールを使うと、`Payload`フォルダの1つ上の階層ごと圧縮してしまい、構造がズレることがあります。** 必ず**Finder標準の「"Payload"を圧縮」**を使うのが一番確実です(ターミナルで`zip -r -y ファイル名.ipa Payload`を使う方法でも可)。
+
 ---
 
 ## 🚀 Step 3: GitHub Releases に .ipa をアップロードする
@@ -59,9 +61,10 @@
 
 1. Xcode またはテキストエディタでプロジェクト直下の **`apps.json`** を開きます。
 2. 以下の項目を最新情報に書き換えます：
-   - **`version`**: Releases のタグと合わせる（例: `"1.0.0"`）
+   - **`version`**: **Xcodeの`Version`(Identity欄)と完全に同じ表記にする**(例: Xcode側が`1.0`なら`"1.0"`。`1.0.0`と書くと不一致でインストールできない)
    - **`versionDate`**: リリース日（ISO 8601形式: `"2026-07-30T00:00:00Z"` など）
    - **`downloadURL`**: Step 3 でコピーした `.ipa` の直リンクURL
+   - **`size`**: ⚠️ **これを忘れると更新できません。** 新しく作った`.ipa`ファイルを、Finderで右クリック→「情報を見る」→「サイズ」欄に出るバイト数(カンマなしの数字)をそのまま入れる。**`.ipa`を作り直すたびに、必ずこの数値も一緒に更新すること**(ファイルサイズが変わっているのに古い数値のままにすると、SideStore側で「the file doesnt exist」というエラーになる)
 
 ```json
 {
@@ -72,11 +75,13 @@
       "name": "Polar360Panel",
       "bundleIdentifier": "com.r-hasegawa.Polar360Panel",
       "developerName": "r-hasegawa",
-      "version": "1.0.0",
+      "subtitle": "Polar360Panel App",
+      "version": "1.0",
       "versionDate": "2026-07-30T00:00:00Z",
-      "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.0.0/Polar360Panel.ipa",
+      "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.0/Polar360Panel_v1_0.ipa",
       "localizedDescription": "Polar360Panel アプリケーション",
-      "iconURL": "https://raw.githubusercontent.com/r-hasegawa/Polar360Panel/main/AppIcon.png"
+      "iconURL": "https://raw.githubusercontent.com/r-hasegawa/Polar360Panel/main/AppIcon.png",
+      "size": 3193213
     }
   ]
 }

@@ -167,18 +167,41 @@ private struct SessionDetailView: View {
         _files = State(initialValue: session.files)
     }
 
+    @State private var selectedGraphFile: DataFileEntry?
+
     var body: some View {
         List {
             ForEach(files) { file in
-                NavigationLink {
-                    StoredDataGraphView(file: file)
-                } label: {
-                    HStack {
-                        Text(file.displayKind)
-                        Spacer()
-                        Text(formattedBytes(file.sizeBytes))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                if file.kind == "events" {
+                    // イベントログは短いテキスト一覧なので、これまで通り通常のプッシュ遷移でよい
+                    NavigationLink {
+                        StoredDataGraphView(file: file, rangeState: GraphRangeState())
+                    } label: {
+                        HStack {
+                            Text(file.displayKind)
+                            Spacer()
+                            Text(formattedBytes(file.sizeBytes))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } else {
+                    // グラフ(HR・体表温・加速度)は、iPadの2カラム表示に押し込まれると
+                    // 窮屈になるため、フルスクリーンで大きく表示する。
+                    Button {
+                        selectedGraphFile = file
+                    } label: {
+                        HStack {
+                            Text(file.displayKind)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text(formattedBytes(file.sizeBytes))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }
@@ -188,6 +211,14 @@ private struct SessionDetailView: View {
             }
         }
         .navigationTitle(session.sessionLabel)
+        .fullScreenCover(item: $selectedGraphFile) { file in
+            NavigationView {
+                MultiSensorGraphView(session: session, initialFile: file) {
+                    selectedGraphFile = nil
+                }
+            }
+            .navigationViewStyle(.stack)
+        }
         .alert("このファイルを削除しますか?", isPresented: $showDeleteConfirm) {
             Button("キャンセル", role: .cancel) { pendingDeleteOffsets = nil }
             Button("削除する", role: .destructive) {
@@ -214,6 +245,91 @@ private struct SessionDetailView: View {
             return String(format: "%.1f MB", Double(bytes) / 1_048_576.0)
         } else {
             return String(format: "%.1f KB", Double(bytes) / 1024.0)
+        }
+    }
+}
+
+/// フルスクリーン表示中、右上にセンサー種別の切り替えボタンを並べるラッパービュー。
+/// GraphRangeStateを切り替え間で共有し続けることで、
+/// 「今見ている表示範囲(ズーム・スクロール位置)を保ったまま」別のセンサーのグラフに
+/// 切り替えて比較できるようにしている。
+private struct MultiSensorGraphView: View {
+    let session: SessionFileGroup
+    let onClose: () -> Void
+
+    @State private var currentFile: DataFileEntry
+    @StateObject private var rangeState = GraphRangeState()
+
+    /// グラフを持つセンサー種別のみ対象(イベントログはここでは扱わない)
+    private static let graphKinds: [(kind: String, label: String)] = [
+        ("hr", "HR"),
+        ("skintemp", "体表温"),
+        ("acc", "加速度")
+    ]
+
+    init(session: SessionFileGroup, initialFile: DataFileEntry, onClose: @escaping () -> Void) {
+        self.session = session
+        self.onClose = onClose
+        _currentFile = State(initialValue: initialFile)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                HStack(spacing: 6) {
+                    ForEach(Self.graphKinds, id: \.kind) { item in
+                        sensorSwitchButton(kind: item.kind, label: item.label)
+                    }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+
+            StoredDataGraphView(file: currentFile, rangeState: rangeState)
+        }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("閉じる") { onClose() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sensorSwitchButton(kind: String, label: String) -> some View {
+        if let file = session.file(kind: kind) {
+            if kind == currentFile.kind {
+                // 現在表示中: 押せない・強調表示
+                Text(label)
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .clipShape(Capsule())
+            } else {
+                // データはあるが非表示中: 押せる
+                Button {
+                    currentFile = file
+                } label: {
+                    Text(label)
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+            }
+        } else {
+            // このセッションにはデータが無い: 押せない・グレーアウト
+            Text(label)
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color(.systemGray5))
+                .foregroundColor(.secondary)
+                .clipShape(Capsule())
         }
     }
 }

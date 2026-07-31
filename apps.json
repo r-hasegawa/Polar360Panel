@@ -3,16 +3,16 @@
   "identifier": "com.r-hasegawa.source",
   "apps": [
     {
-      "name": "Polar360Panel",
+      "name": "PolarPanel",
       "bundleIdentifier": "com.r-hasegawa.Polar360Panel",
       "developerName": "r-hasegawa",
-      "subtitle": "Polar360Panel App",
-      "version": "1.0",
-      "versionDate": "2026-07-30T00:00:00Z",
-      "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.0/Polar360Panel_v1_0.ipa",
+      "subtitle": "PolarPanel App",
+      "version": "1.1",
+      "versionDate": "2026-07-31T00:00:00Z",
+      "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.1/PolarPanel_v1_1.ipa",
       "localizedDescription": "Polar360Panel アプリケーション",
       "iconURL": "https://raw.githubusercontent.com/r-hasegawa/Polar360Panel/main/AppIcon.png",
-      "size": 3193213
+      "size": 3237722
     }
   ]
 }

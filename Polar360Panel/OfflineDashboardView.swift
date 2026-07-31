@@ -40,23 +40,27 @@ struct OfflineDashboardView: View {
                 }
                 .font(.caption)
             }
-            ScrollView {
-                Grid(horizontalSpacing: 6, verticalSpacing: 6) {
-                    ForEach(rows.indices, id: \.self) { rowIndex in
-                        GridRow {
-                            ForEach(0..<gridColumns, id: \.self) { colIndex in
-                                if colIndex < rows[rowIndex].count {
-                                    let slot = rows[rowIndex][colIndex]
-                                    OfflineSensorPanelView(viewModel: slot) {
-                                        removeSlot(slot)
+            GeometryReader { geo in
+                ScrollView {
+                    Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+                        ForEach(rows.indices, id: \.self) { rowIndex in
+                            GridRow {
+                                ForEach(0..<gridColumns, id: \.self) { colIndex in
+                                    if colIndex < rows[rowIndex].count {
+                                        let slot = rows[rowIndex][colIndex]
+                                        OfflineSensorPanelView(viewModel: slot) {
+                                            removeSlot(slot)
+                                        }
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    } else {
+                                        Color.clear
                                     }
-                                    .frame(maxWidth: .infinity)
-                                } else {
-                                    Color.clear
                                 }
                             }
+                            .frame(maxHeight: .infinity)
                         }
                     }
+                    .frame(minHeight: geo.size.height)
                 }
             }
         }

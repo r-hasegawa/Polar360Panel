@@ -5,6 +5,7 @@ struct OfflineSensorPanelView: View {
     @ObservedObject var viewModel: SensorSlotViewModel
     @ObservedObject private var manager = PolarManager.shared
     @State private var showDeviceList = false
+    @State private var showDeletePendingDataConfirm = false
     /// 台数を可変にできるオフラインモード専用。未接続時にこのパネル自体を
     /// 削除したい時に呼ばれる(nilならボタンを出さない=オンライン側では未使用)。
     var onRemove: (() -> Void)? = nil
@@ -33,6 +34,14 @@ struct OfflineSensorPanelView: View {
         } message: {
             Text(viewModel.measurementStopSummary ?? "")
         }
+        .alert("このデータを削除しますか?", isPresented: $showDeletePendingDataConfirm) {
+            Button("キャンセル", role: .cancel) {}
+            Button("削除する", role: .destructive) {
+                viewModel.deletePendingOfflineDataWithoutExtracting()
+            }
+        } message: {
+            Text("取得せずにセンサー内蔵メモリから削除します。この操作は元に戻せません。")
+        }
         .alert("加速度の記録エラーが起きる可能性があります", isPresented: $viewModel.showAccRiskWarning) {
             Button("設定をやり直す", role: .cancel) {
                 viewModel.dismissAccRiskWarningToReconfigure()
@@ -50,6 +59,7 @@ struct OfflineSensorPanelView: View {
         case .error: return .red
         case .unexpectedDisconnect: return .orange
         case .connected: return .green
+        case .pendingOfflineData: return .blue
         default: return .gray
         }
     }
@@ -108,6 +118,9 @@ struct OfflineSensorPanelView: View {
         case .configuring:
             measurementSettingsView
 
+        case .pendingOfflineData(let hrCount, let skinTempCount, let accCount):
+            pendingOfflineDataView(hrCount: hrCount, skinTempCount: skinTempCount, accCount: accCount)
+
         case .connected:
             VStack(alignment: .leading, spacing: 10) {
                 if let errorMessage = viewModel.errorMessage {
@@ -138,7 +151,7 @@ struct OfflineSensorPanelView: View {
                     if viewModel.isSyncing {
                         HStack(spacing: 4) {
                             ProgressView().scaleEffect(0.6)
-                            Text(phaseText(viewModel.stopPhase))
+                            Text(phaseText(viewModel.stopPhase, viewModel: viewModel))
                         }
                         progressRow(label: "HR", progress: viewModel.hrProgress)
                         progressRow(label: "体表温", progress: viewModel.skinTempProgress)
@@ -219,6 +232,61 @@ struct OfflineSensorPanelView: View {
     }
 
     @ViewBuilder
+    private func pendingOfflineDataView(hrCount: Int, skinTempCount: Int, accCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("未取得のデータが残っています", systemImage: "exclamationmark.circle")
+                .font(.headline)
+                .foregroundColor(.blue)
+            Text("HR \(hrCount)件 / 体表温 \(skinTempCount)件 / 加速度 \(accCount)件")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text("以前の計測終了時に取得できなかったデータがセンサー内に残っています。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            if viewModel.isSyncing {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        ProgressView().scaleEffect(0.6)
+                        Text(phaseText(viewModel.stopPhase, viewModel: viewModel))
+                    }
+                    progressRow(label: "HR", progress: viewModel.hrProgress)
+                    progressRow(label: "体表温", progress: viewModel.skinTempProgress)
+                    progressRow(label: "加速度", progress: viewModel.accProgress)
+                }
+                .font(.caption)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        viewModel.extractPendingOfflineData()
+                    } label: {
+                        Label("データを抽出する", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button(role: .destructive) {
+                        showDeletePendingDataConfirm = true
+                    } label: {
+                        Label("取得せずに削除する", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        viewModel.ignorePendingOfflineDataAndConfigure()
+                    } label: {
+                        Label("無視して新しい計測を始める", systemImage: "arrow.right.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .font(.caption)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var measurementSettingsView: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("計測設定").font(.headline)
@@ -267,25 +335,39 @@ struct OfflineSensorPanelView: View {
         .padding(.horizontal, 8)
     }
 
-    private func phaseText(_ phase: OfflineStopPhase) -> String {
+    private func phaseText(_ phase: OfflineStopPhase, viewModel: SensorSlotViewModel) -> String {
         switch phase {
         case .idle: return ""
         case .stoppingRecording: return "記録停止中..."
-        case .fetchingEntry(let type): return "データ取得中...(\(type))"
-        case .savingCsv(let type): return "CSVに保存中...(\(type))"
-        case .erasingMemory(let type): return "内蔵メモリ消去中...(\(type))"
+        case .fetchingEntry(let type): return "データ取得中(\(type)：\(progressLabel(for: type, viewModel: viewModel)))"
+        case .savingCsv(let type): return "CSV保存中(\(type)：\(progressLabel(for: type, viewModel: viewModel)))"
+        case .erasingMemory(let type): return "メモリ消去中(\(type)：\(progressLabel(for: type, viewModel: viewModel)))"
         case .done: return "完了"
         }
+    }
+
+    private func progressLabel(for typeLabel: String, viewModel: SensorSlotViewModel) -> String {
+        let progress: TypeProgress
+        switch typeLabel {
+        case "HR": progress = viewModel.hrProgress
+        case "体表温": progress = viewModel.skinTempProgress
+        case "加速度": progress = viewModel.accProgress
+        default: return ""
+        }
+        return "\(progress.displayIndex)/\(progress.totalCount)"
     }
 
     @ViewBuilder
     private func progressRow(label: String, progress: TypeProgress) -> some View {
         if progress.totalCount > 0 {
+            let isDone = progress.completedCount >= progress.totalCount
             HStack(spacing: 4) {
                 Circle()
-                    .fill(progress.completedCount >= progress.totalCount ? Color.green : Color.gray)
+                    .fill(isDone ? Color.green : Color.gray)
                     .frame(width: 6, height: 6)
-                Text("\(label) (\(progress.displayIndex)/\(progress.totalCount)件) \(progress.currentPercent)%")
+                Text(isDone
+                     ? "\(label) (\(progress.displayIndex)/\(progress.totalCount)件) 完了"
+                     : "\(label) (\(progress.displayIndex)/\(progress.totalCount)件) \(progress.currentPercent)%")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

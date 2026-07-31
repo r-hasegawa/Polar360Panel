@@ -91,6 +91,61 @@ final class CsvLogger {
         }
     }
 
+    /// 加速度をまとめて書き込む版。オフライン記録の一括取得のように大量サンプルを
+    /// 一度に処理する場合、1サンプルごとにqueue.asyncを積むと(数十万件規模で)
+    /// 著しく遅くなるため、まとめて1回のクロージャで処理する。
+    /// async化しているのは、呼び出し側(メモリ消去の直前)で「実際にディスクへの
+    /// 書き込みが完了してから次に進みたい」ため。fire-and-forgetにすると、
+    /// 書き込みキューが残っている間にセンサー側のデータを消してしまう
+    /// (僅かとはいえロスの可能性がある)ケースを避ける。
+    func logAccBatch(_ samples: [(x: Int, y: Int, z: Int, date: Date)]) async {
+        guard !samples.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.ensureAccFileHandle()
+                var buffer = ""
+                buffer.reserveCapacity(samples.count * 40)
+                for sample in samples {
+                    buffer += "\(self.isoString(sample.date)),\(sample.x),\(sample.y),\(sample.z)\n"
+                }
+                if let data = buffer.data(using: .utf8) {
+                    self.accFileHandle?.write(data)
+                }
+                try? self.accFileHandle?.synchronize()
+                continuation.resume()
+            }
+        }
+    }
+
+    /// HR・体表温など、行の配列をまとめて1回のファイル書き込みで追記する。
+    /// appendLineを大量件数分繰り返すと、1件ごとにファイルを開閉するオーバーヘッドが
+    /// 積み重なって遅くなるため、複数行をまとめて渡せるようにしたもの。
+    /// logAccBatchと同様の理由でasync化し、書き込み完了を待てるようにしている。
+    func appendBatch(_ lines: [String], kind: String, header: String) async {
+        guard !lines.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let url = self.fileURL(kind: kind)
+                let joined = lines.joined(separator: "\n") + "\n"
+                if FileManager.default.fileExists(atPath: url.path) {
+                    guard let handle = try? FileHandle(forWritingTo: url) else {
+                        continuation.resume()
+                        return
+                    }
+                    defer { try? handle.close() }
+                    handle.seekToEndOfFile()
+                    if let data = joined.data(using: .utf8) {
+                        handle.write(data)
+                    }
+                } else {
+                    let content = header + "\n" + joined
+                    try? content.write(to: url, atomically: true, encoding: .utf8)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
     /// 切断時に必ず呼び、開きっぱなしのFileHandleを閉じること。
     func closeAccFile() {
         queue.async {
@@ -121,6 +176,12 @@ final class CsvLogger {
     }
 
     private func isoString(_ date: Date) -> String {
+        Self.isoString(date)
+    }
+
+    /// 他のクラス(SensorSlotViewModelなど)からも、CSV内のタイムスタンプと
+    /// 同じ書式の文字列を作れるようにするための共有ヘルパー。
+    static func isoString(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)

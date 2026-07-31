@@ -8,6 +8,7 @@ enum SlotState: Equatable {
     case configuring      // 接続完了後、計測開始前のHz設定画面
     case connected
     case measurementStopped // オンラインモードで「計測終了」した後、グラフを見返せる状態
+    case pendingOfflineData(hrCount: Int, skinTempCount: Int, accCount: Int) // 記録は止まっているが、センサー内に未取得データが残っている状態
     case unexpectedDisconnect(String) // 電波切れ等、ユーザー操作によらない切断
     case error(String)
 }
@@ -331,6 +332,16 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
                 if allActive {
                     csvLogger?.logEvent("offline_recording_already_active_resuming")
                     startMeasurementAfterConfiguring()
+                    return
+                }
+                // 記録は動いていない。センサー内に前回未取得のまま残っているデータがないか確認する。
+                let counts = try await offlineEntryCounts(deviceId: deviceId)
+                if counts.total > 0 {
+                    print("[Offline] pending unfetched data found hr=\(counts.hr) skinTemp=\(counts.skinTemp) acc=\(counts.acc)")
+                    csvLogger?.logEvent("pending_offline_data_detected hr=\(counts.hr) skinTemp=\(counts.skinTemp) acc=\(counts.acc)")
+                    UserDefaults.standard.set(deviceId, forKey: lastDeviceIdKey)
+                    UserDefaults.standard.set(deviceName, forKey: lastDeviceNameKey)
+                    state = .pendingOfflineData(hrCount: counts.hr, skinTempCount: counts.skinTemp, accCount: counts.acc)
                     return
                 }
             } catch {
@@ -805,6 +816,7 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
                 let typeLabel = displayLabel(for: entry.type)
                 do {
                     stopPhase = .fetchingEntry(type: typeLabel)
+                    print("[Offline] ▶ fetchingEntry start type=\(typeLabel) path=\(entry.path)")
                     var finalData: PolarOfflineRecordingData?
                     for try await progressResult in api.getOfflineRecordWithProgress(deviceId, entry: entry, secret: nil) {
                         switch progressResult {
@@ -817,20 +829,33 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
                     guard let data = finalData else {
                         throw NSError(domain: "Polar360Panel", code: -1, userInfo: [NSLocalizedDescriptionKey: "データが空でした"])
                     }
+                    print("[Offline] ✓ fetchingEntry done type=\(typeLabel) path=\(entry.path)")
 
                     stopPhase = .savingCsv(type: typeLabel)
-                    let result = saveOfflineRecordingData(data)
+                    print("[Offline] ▶ savingCsv start type=\(typeLabel) path=\(entry.path)")
+                    let result = await saveOfflineRecordingData(data)
                     tally[result.label, default: 0] += result.count
                     if let first = result.first, earliest == nil || first < earliest! { earliest = first }
                     if let last = result.last, latest == nil || last > latest! { latest = last }
+                    print("[Offline] ✓ savingCsv done type=\(typeLabel) path=\(entry.path) count=\(result.count)")
 
                     stopPhase = .erasingMemory(type: typeLabel)
-                    try await api.removeOfflineRecord(deviceId, entry: entry)
-                    csvLogger?.logEvent("offline_synced_removed path=\(entry.path) type=\(result.label) count=\(result.count)")
-                    successCount += 1
+                    print("[Offline] ▶ erasingMemory start type=\(typeLabel) path=\(entry.path)")
+                    let removed = await withTimeout(seconds: 20) {
+                        try await self.api.removeOfflineRecord(deviceId, entry: entry)
+                    }
+                    if removed != nil {
+                        print("[Offline] ✓ erasingMemory done type=\(typeLabel) path=\(entry.path)")
+                        csvLogger?.logEvent("offline_synced_removed path=\(entry.path) type=\(result.label) count=\(result.count)")
+                        successCount += 1
+                    } else {
+                        print("[Offline] ✗ erasingMemory TIMEOUT(20s) type=\(typeLabel) path=\(entry.path) ※CSV保存自体は完了済みなのでデータロスはない")
+                        csvLogger?.logEvent("offline_remove_timeout path=\(entry.path) type=\(result.label)")
+                        failCount += 1
+                    }
                     advanceProgress(for: entry.type)
                 } catch {
-                    print("[Offline] fetch/remove failed for \(entry.path): \(error)")
+                    print("[Offline] ✗ fetch/save failed for \(entry.path): \(error)")
                     csvLogger?.logEvent("offline_sync_entry_failed path=\(entry.path)")
                     failCount += 1
                     advanceProgress(for: entry.type)
@@ -843,12 +868,118 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
         return (successCount, failCount, tally, earliest, latest)
     }
 
+    /// 指定秒数以内に処理が終わらなければタイムアウトとしてnilを返す(ハング防止用の汎用ヘルパー)。
+    /// removeOfflineRecordのように、BLE応答が返ってこない場合に無限に待ち続けてしまう
+    /// 呼び出しを、この関数でラップすることで一定時間で諦められるようにする。
+    private func withTimeout<T: Sendable>(seconds: Double, operation: @escaping () async throws -> T) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask {
+                try? await operation()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return nil
+            }
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
     private func displayLabel(for type: PolarDeviceDataType) -> String {
         switch type {
         case .hr: return "HR"
         case .skinTemperature: return "体表温"
         case .acc: return "加速度"
         default: return "\(type)"
+        }
+    }
+
+    /// センサー内に残っている未取得の記録を、種類別に件数だけ数える(取得はしない)。
+    private func offlineEntryCounts(deviceId: String) async throws -> (hr: Int, skinTemp: Int, acc: Int, total: Int) {
+        var entries: [PolarOfflineRecordingEntry] = []
+        for try await entry in api.listOfflineRecordings(deviceId) {
+            entries.append(entry)
+        }
+        let hr = entries.filter { $0.type == .hr }.count
+        let skinTemp = entries.filter { $0.type == .skinTemperature }.count
+        let acc = entries.filter { $0.type == .acc }.count
+        return (hr, skinTemp, acc, entries.count)
+    }
+
+    // MARK: - 未取得データへの対応(.pendingOfflineData状態からの3アクション)
+
+    /// 「抽出する」: 計測終了時と全く同じ処理(取得→CSV保存→メモリ消去)を行い、
+    /// 終わったら計測終了時と同様サマリーを表示 → OKで切断、という流れにする。
+    func extractPendingOfflineData() {
+        guard let deviceId else { return }
+        isSyncing = true
+        stopPhase = .stoppingRecording
+        hrProgress = TypeProgress()
+        skinTempProgress = TypeProgress()
+        accProgress = TypeProgress()
+        csvLogger?.logEvent("pending_data_extraction_requested")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.isSyncing = false
+                self.stopPhase = .idle
+            }
+            let result = await self.fetchAndSaveAllOfflineEntries(deviceId: deviceId)
+            self.lastOfflineSyncDate = Date()
+            let summary = self.buildSyncSummary(
+                successCount: result.successCount, failCount: result.failCount,
+                tally: result.tally, earliest: result.earliest, latest: result.latest
+            )
+            self.lastSyncSummary = summary
+            // 計測終了時と同じサマリーダイアログを再利用し、OKが押されたら切断する
+            self.measurementStopSummary = summary
+        }
+    }
+
+    /// 「削除する」: 取得せずそのままセンサー内蔵メモリの記録を削除する。
+    /// 確認ダイアログの表示自体はView側の責任(誤操作防止のため)。
+    func deletePendingOfflineDataWithoutExtracting() {
+        guard let deviceId else { return }
+        isSyncing = true
+        csvLogger?.logEvent("pending_data_delete_without_extract_requested")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isSyncing = false }
+            var deletedCount = 0
+            var failedCount = 0
+            do {
+                var entries: [PolarOfflineRecordingEntry] = []
+                for try await entry in self.api.listOfflineRecordings(deviceId) {
+                    entries.append(entry)
+                }
+                for entry in entries {
+                    do {
+                        try await self.api.removeOfflineRecord(deviceId, entry: entry)
+                        deletedCount += 1
+                    } catch {
+                        failedCount += 1
+                    }
+                }
+            } catch {
+                print("[Offline] pending data delete: listOfflineRecordings failed: \(error)")
+            }
+            print("[Offline] pending data deleted(未取得のまま破棄) count=\(deletedCount) failed=\(failedCount)")
+            self.csvLogger?.logEvent("pending_data_deleted count=\(deletedCount) failed=\(failedCount)")
+            let summary = "\(deletedCount)件削除(未取得のまま破棄) / \(failedCount)件失敗"
+            self.lastSyncSummary = summary
+            // こちらも計測終了時と同じサマリーダイアログを再利用する
+            self.measurementStopSummary = summary
+        }
+    }
+
+    /// 「無視して新しい計測を始める」: 古いデータには一切触れず、通常の計測設定画面へ進む。
+    func ignorePendingOfflineDataAndConfigure() {
+        guard let deviceId else { return }
+        csvLogger?.logEvent("pending_data_ignored_proceeding_to_configure")
+        state = .configuring
+        Task { @MainActor [weak self] in
+            await self?.loadRateOptions(deviceId: deviceId)
         }
     }
 
@@ -908,44 +1039,77 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
     /// 取得したオフライン記録データの中身を種類別にCSVへ保存する。
     /// HRだけはサンプルごとのタイムスタンプを持たないため、startTimeから1Hz想定で近似する。
     /// 戻り値: (種類ラベル, サンプル数, 最初の日時, 最後の日時) — サマリー表示用
-    private func saveOfflineRecordingData(_ data: PolarOfflineRecordingData) -> (label: String, count: Int, first: Date?, last: Date?) {
+    ///
+    /// NOTE: 以前は1サンプルごとに個別のqueue.async書き込みを行っていたが、
+    /// 加速度のように長時間分のデータが溜まっていると数十万〜100万件規模になり、
+    /// @MainActor上で一度もawaitを挟まない完全同期ループが数分単位で固まって見える
+    /// 原因になっていた。まとめてバッチ書き込みし、定期的にTask.yield()で
+    /// 実行を区切ることで、UIの応答性と進捗表示を保つようにしている。
+    @MainActor
+    private func saveOfflineRecordingData(_ data: PolarOfflineRecordingData) async -> (label: String, count: Int, first: Date?, last: Date?) {
         switch data {
         case .hrOfflineRecordingData(let samples, let startTime):
+            print("[Offline] hr samples count=\(samples.count)")
+            var lines: [String] = []
+            lines.reserveCapacity(samples.count)
             var lastDate: Date?
             for (index, sample) in samples.enumerated() {
                 let approxDate = startTime.addingTimeInterval(Double(index))
-                csvLogger?.logHr(Int(sample.hr), at: approxDate)
+                lines.append("\(CsvLogger.isoString(approxDate)),\(sample.hr)")
                 lastDate = approxDate
             }
+            await csvLogger?.appendBatch(lines, kind: "hr", header: "timestamp,hr_bpm")
             return ("HR", samples.count, samples.isEmpty ? nil : startTime, lastDate)
+
         case .skinTemperatureOfflineRecordingData(let tempData, _):
+            print("[Offline] skinTemp samples count=\(tempData.samples.count)")
+            var lines: [String] = []
+            lines.reserveCapacity(tempData.samples.count)
             var first: Date?
             var last: Date?
             for sample in tempData.samples {
                 let date = polarEpochDate(nanoseconds: sample.timeStamp)
-                csvLogger?.logSkinTemperature(Double(sample.temperature), at: date)
+                lines.append("\(CsvLogger.isoString(date)),\(String(format: "%.3f", sample.temperature))")
                 if first == nil { first = date }
                 last = date
             }
+            await csvLogger?.appendBatch(lines, kind: "skintemp", header: "timestamp,skin_temperature_c")
             // 疑似リアルタイム表示用に、直近の値を画面にも反映する
             if let lastSample = tempData.samples.last {
                 self.skinTemperature = Double(lastSample.temperature)
             }
             return ("体表温", tempData.samples.count, first, last)
+
         case .accOfflineRecordingData(let accData, _, _):
+            print("[Offline] acc samples count=\(accData.count)")
             var first: Date?
             var last: Date?
-            for sample in accData {
+            let flushSize = 20_000
+            var batch: [(x: Int, y: Int, z: Int, date: Date)] = []
+            batch.reserveCapacity(min(accData.count, flushSize))
+            for (index, sample) in accData.enumerated() {
                 let date = polarEpochDate(nanoseconds: sample.timeStamp)
-                csvLogger?.logAcc(x: Int(sample.x), y: Int(sample.y), z: Int(sample.z), at: date)
+                batch.append((x: Int(sample.x), y: Int(sample.y), z: Int(sample.z), date: date))
                 if first == nil { first = date }
                 last = date
+                if batch.count >= flushSize {
+                    await csvLogger?.logAccBatch(batch)
+                    batch.removeAll(keepingCapacity: true)
+                    accProgress.currentPercent = accData.isEmpty ? 100 : min(100, Int(Double(index + 1) / Double(accData.count) * 100))
+                    // 完全同期ループのままだとUIが固まって見えるため、ここで一度制御を返す
+                    await Task.yield()
+                }
             }
+            if !batch.isEmpty {
+                await csvLogger?.logAccBatch(batch)
+            }
+            accProgress.currentPercent = 100
             if !accData.isEmpty {
                 // 「取得中」インジケータとして、直近の同期で実際にデータが取れたことを示す
                 self.isAccStreaming = true
             }
             return ("加速度", accData.count, first, last)
+
         case .emptyData:
             return ("(空)", 0, nil, nil)
         default:

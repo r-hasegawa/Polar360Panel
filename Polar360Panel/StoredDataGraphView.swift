@@ -1,8 +1,25 @@
 import SwiftUI
 import Charts
 
+/// ズーム(表示範囲の長さ)・スクロール位置(開始時刻)・範囲固定トグルの状態。
+/// 複数のStoredDataGraphViewインスタンス間(センサー種別の切り替え時)で
+/// このオブジェクトを共有すると、「同じ表示範囲のまま別のグラフに切り替えて比較する」
+/// ことができる。単独で使う場合(イベントログ等)は、呼び出し側で毎回新しく作ればよい。
+final class GraphRangeState: ObservableObject {
+    @Published var visibleDomainLength: TimeInterval = 300
+    @Published var baseDomainLength: TimeInterval = 300
+    @Published var scrollPositionStart: Date = Date()
+    @Published var rangeLocked: Bool = false
+    /// 一度でも実データに基づいて初期化されたかどうか。
+    /// falseの間は、ロードされたファイルの実際のデータ範囲で表示範囲を初期化する。
+    /// true以降は、別のファイルに切り替わっても表示範囲を上書きしない
+    /// (＝ユーザーが選んだ表示範囲を保ったまま比較できるようにする)。
+    var initialized: Bool = false
+}
+
 struct StoredDataGraphView: View {
     let file: DataFileEntry
+    @ObservedObject var rangeState: GraphRangeState
 
     @State private var hrPoints: [StoredHrPoint] = []
     @State private var tempPoints: [StoredSkinTempPoint] = []
@@ -10,16 +27,10 @@ struct StoredDataGraphView: View {
     @State private var eventLines: [String] = []
     @State private var isLoading = true
 
-    // ズーム(表示範囲の長さ)・スクロール位置(開始時刻)の状態
-    @State private var visibleDomainLength: TimeInterval = 300
-    @State private var baseDomainLength: TimeInterval = 300
+    // ズーム・スクロール位置以外の、このファイル固有のデータ範囲(DatePickerの上下限や「全体表示」の基準に使う)
     @State private var fullDomainLength: TimeInterval = 300
-    @State private var scrollPositionStart: Date = Date()
     @State private var dataStartDate: Date = Date()
     @State private var dataEndDate: Date = Date()
-
-    // 範囲固定トグル: ONの間はピンチ・ドラッグでの変更を無効化する
-    @State private var rangeLocked = false
 
     var body: some View {
         ScrollView {
@@ -41,10 +52,10 @@ struct StoredDataGraphView: View {
                                 .foregroundStyle(.red)
                         }
                         .zoomable(
-                            visibleDomainLength: $visibleDomainLength,
-                            baseDomainLength: $baseDomainLength,
-                            scrollPositionStart: $scrollPositionStart,
-                            rangeLocked: $rangeLocked
+                            visibleDomainLength: $rangeState.visibleDomainLength,
+                            baseDomainLength: $rangeState.baseDomainLength,
+                            scrollPositionStart: $rangeState.scrollPositionStart,
+                            rangeLocked: $rangeState.rangeLocked
                         )
                         .frame(height: 260)
 
@@ -56,10 +67,10 @@ struct StoredDataGraphView: View {
                         }
                         .chartYScale(domain: .automatic(includesZero: false))
                         .zoomable(
-                            visibleDomainLength: $visibleDomainLength,
-                            baseDomainLength: $baseDomainLength,
-                            scrollPositionStart: $scrollPositionStart,
-                            rangeLocked: $rangeLocked
+                            visibleDomainLength: $rangeState.visibleDomainLength,
+                            baseDomainLength: $rangeState.baseDomainLength,
+                            scrollPositionStart: $rangeState.scrollPositionStart,
+                            rangeLocked: $rangeState.rangeLocked
                         )
                         .frame(height: 260)
 
@@ -74,10 +85,10 @@ struct StoredDataGraphView: View {
                                 .foregroundStyle(by: .value("軸", "Z"))
                         }
                         .zoomable(
-                            visibleDomainLength: $visibleDomainLength,
-                            baseDomainLength: $baseDomainLength,
-                            scrollPositionStart: $scrollPositionStart,
-                            rangeLocked: $rangeLocked
+                            visibleDomainLength: $rangeState.visibleDomainLength,
+                            baseDomainLength: $rangeState.baseDomainLength,
+                            scrollPositionStart: $rangeState.scrollPositionStart,
+                            rangeLocked: $rangeState.rangeLocked
                         )
                         .frame(height: 260)
 
@@ -102,12 +113,18 @@ struct StoredDataGraphView: View {
         }
         .navigationTitle(file.displayKind)
         .onAppear(perform: load)
+        .onChange(of: file.id) { _ in
+            // センサー種別のボタンでfileが切り替わった時、onAppearは再発火しないため
+            // ここで明示的に再読込する。
+            isLoading = true
+            load()
+        }
     }
 
     @ViewBuilder
     private var rangeControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle("表示範囲を固定する", isOn: $rangeLocked)
+            Toggle("表示範囲を固定する", isOn: $rangeState.rangeLocked)
                 .font(.caption)
 
             HStack {
@@ -115,7 +132,7 @@ struct StoredDataGraphView: View {
                     Text("開始").font(.caption2).foregroundColor(.secondary)
                     DatePicker(
                         "",
-                        selection: $scrollPositionStart,
+                        selection: $rangeState.scrollPositionStart,
                         in: dataStartDate...dataEndDate,
                         displayedComponents: [.date, .hourAndMinute]
                     )
@@ -133,9 +150,9 @@ struct StoredDataGraphView: View {
                 }
                 Spacer()
                 Button("全体表示") {
-                    scrollPositionStart = dataStartDate
-                    visibleDomainLength = fullDomainLength
-                    baseDomainLength = fullDomainLength
+                    rangeState.scrollPositionStart = dataStartDate
+                    rangeState.visibleDomainLength = fullDomainLength
+                    rangeState.baseDomainLength = fullDomainLength
                 }
                 .font(.caption)
             }
@@ -150,12 +167,12 @@ struct StoredDataGraphView: View {
     /// 変更されたらvisibleDomainLengthに反映する。
     private var endDateBinding: Binding<Date> {
         Binding(
-            get: { scrollPositionStart.addingTimeInterval(visibleDomainLength) },
+            get: { rangeState.scrollPositionStart.addingTimeInterval(rangeState.visibleDomainLength) },
             set: { newEnd in
-                let newLength = newEnd.timeIntervalSince(scrollPositionStart)
+                let newLength = newEnd.timeIntervalSince(rangeState.scrollPositionStart)
                 guard newLength > 5 else { return }
-                visibleDomainLength = newLength
-                baseDomainLength = newLength
+                rangeState.visibleDomainLength = newLength
+                rangeState.baseDomainLength = newLength
             }
         )
     }
@@ -193,6 +210,9 @@ struct StoredDataGraphView: View {
         }
     }
 
+    /// ファイル固有のデータ範囲(DatePickerの上下限・「全体表示」の基準)は常に更新する。
+    /// 表示範囲そのもの(rangeState)は、まだ一度も初期化されていない場合のみ設定する。
+    /// これにより、センサー種別を切り替えても「今見ている範囲のまま」比較できる。
     private func setInitialDomain(first: Date?, last: Date?) {
         let start = first ?? Date()
         let end = last ?? start.addingTimeInterval(300)
@@ -200,9 +220,11 @@ struct StoredDataGraphView: View {
         dataStartDate = start
         dataEndDate = end
         fullDomainLength = span
-        visibleDomainLength = span
-        baseDomainLength = span
-        scrollPositionStart = start
+        guard !rangeState.initialized else { return }
+        rangeState.visibleDomainLength = span
+        rangeState.baseDomainLength = span
+        rangeState.scrollPositionStart = start
+        rangeState.initialized = true
     }
 }
 

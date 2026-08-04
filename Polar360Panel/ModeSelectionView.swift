@@ -8,6 +8,13 @@ struct ModeSelectionView: View {
     @State private var showSensorManagement = false
     @State private var showDataManagement = false
 
+    /// Xcodeの Target → General → Identity → Version(CFBundleShortVersionString)を
+    /// 実行時に読み取って表示する。ここを手動で書き換える必要は無い。
+    private var versionLabel: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        return "v\(version)"
+    }
+
     var body: some View {
         VStack(spacing: 32) {
             Text("計測モードを選択")
@@ -61,6 +68,12 @@ struct ModeSelectionView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
+        .overlay(alignment: .bottomTrailing) {
+            Text(versionLabel)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(8)
+        }
         .sheet(isPresented: $showUsageGuide) {
             UsageGuideView()
         }

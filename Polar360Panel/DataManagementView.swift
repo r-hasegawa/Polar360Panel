@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DataManagementView: View {
     @Environment(\.dismiss) private var dismiss
@@ -168,6 +169,8 @@ private struct SessionDetailView: View {
     }
 
     @State private var selectedGraphFile: DataFileEntry?
+    @State private var shareZipURL: URL?
+    @State private var isPreparingShare = false
 
     var body: some View {
         List {
@@ -211,6 +214,32 @@ private struct SessionDetailView: View {
             }
         }
         .navigationTitle(session.sessionLabel)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if isPreparingShare {
+                    ProgressView()
+                } else {
+                    Button {
+                        prepareAndShareSession()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { shareZipURL != nil },
+            set: { if !$0 { shareZipURL = nil } }
+        )) {
+            if let url = shareZipURL {
+                ShareSheet(activityItems: [url]) {
+                    // 共有シートが閉じたら(送信完了・保存完了・キャンセルいずれでも)、
+                    // 一時的に作ったzipファイルは役目を終えるので削除する。
+                    try? FileManager.default.removeItem(at: url)
+                    shareZipURL = nil
+                }
+            }
+        }
         .fullScreenCover(item: $selectedGraphFile) { file in
             NavigationView {
                 MultiSensorGraphView(session: session, initialFile: file) {
@@ -240,6 +269,54 @@ private struct SessionDetailView: View {
         onChanged()
     }
 
+    /// セッションのファイル一式(HR・体表温・加速度・イベントログ)を
+    /// 一時ディレクトリ上でひとまとめにし、zip化してから共有シートを開く。
+    /// zip自体はDocuments配下ではなく一時ディレクトリに作るため、
+    /// データ管理画面のファイルスキャン対象に混ざることはない。
+    private func prepareAndShareSession() {
+        isPreparingShare = true
+        let sessionLabel = session.sessionLabel
+        let filesToShare = files
+        DispatchQueue.global(qos: .userInitiated).async {
+            let workDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("share_\(UUID().uuidString)", isDirectory: true)
+            var resultZipURL: URL?
+            do {
+                try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+                for file in filesToShare {
+                    let dest = workDir.appendingPathComponent(file.url.lastPathComponent)
+                    try? FileManager.default.copyItem(at: file.url, to: dest)
+                }
+
+                var coordError: NSError?
+                let coordinator = NSFileCoordinator()
+                coordinator.coordinate(readingItemAt: workDir, options: .forUploading, error: &coordError) { zippedURL in
+                    let finalURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("\(sessionLabel).zip")
+                    try? FileManager.default.removeItem(at: finalURL)
+                    do {
+                        try FileManager.default.copyItem(at: zippedURL, to: finalURL)
+                        resultZipURL = finalURL
+                    } catch {
+                        print("[Share] zipのコピーに失敗: \(error)")
+                    }
+                }
+                if let coordError {
+                    print("[Share] zip作成に失敗: \(coordError)")
+                }
+            } catch {
+                print("[Share] 準備に失敗: \(error)")
+            }
+            // 素材コピー用の作業フォルダはzip化が済めばもう不要
+            try? FileManager.default.removeItem(at: workDir)
+
+            DispatchQueue.main.async {
+                isPreparingShare = false
+                shareZipURL = resultZipURL
+            }
+        }
+    }
+
     private func formattedBytes(_ bytes: Int64) -> String {
         if bytes > 1_048_576 {
             return String(format: "%.1f MB", Double(bytes) / 1_048_576.0)
@@ -248,6 +325,24 @@ private struct SessionDetailView: View {
         }
     }
 }
+
+/// UIActivityViewController(共有シート)のSwiftUIラッパー。
+/// onCompleteは送信完了・保存完了・キャンセル、いずれの場合でも呼ばれる。
+struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    let onComplete: () -> Void
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            onComplete()
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
 
 /// フルスクリーン表示中、右上にセンサー種別の切り替えボタンを並べるラッパービュー。
 /// GraphRangeStateを切り替え間で共有し続けることで、

@@ -311,6 +311,7 @@ private struct MultiSensorGraphView: View {
             } else {
                 // データはあるが非表示中: 押せる
                 Button {
+                    print("[Graph] button tapped kind=\(kind) label=\(label) -> file=\(file.url.lastPathComponent) (file.kind=\(file.kind))")
                     currentFile = file
                 } label: {
                     Text(label)

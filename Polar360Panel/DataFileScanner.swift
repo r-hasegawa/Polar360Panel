@@ -17,7 +17,7 @@ struct SessionFileGroup: Identifiable {
     }
 }
 
-struct DataFileEntry: Identifiable {
+struct DataFileEntry: Identifiable, Equatable {
     let id = UUID()
     let kind: String   // "hr" / "skintemp" / "acc" / "events"
     let url: URL

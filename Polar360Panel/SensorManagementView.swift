@@ -125,14 +125,26 @@ private struct SensorNicknameRow: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             // 一番端(最初にスワイプした時点)に出したいものを先頭に書く
-            Button(role: .destructive) {
-                if SensorManagementView.hasStoredData(deviceId: deviceId) {
+            //
+            // NOTE: role: .destructiveを付けたボタンは、タップした瞬間に
+            // SwiftUI(List)側が「削除された」とみなして、実際に何をしたかに
+            // 関わらず行を自動でスライドアウトさせてしまう。保存済みデータが
+            // あって実際には削除していないケースでもこれが起きてしまい、
+            // 「勝手に一時的に消える」「警告アラートが自分の意思と関係なく閉じる」
+            // という表示上の不具合になっていた。
+            // → 実際に削除が起きる場合(データが無い場合)だけdestructiveにする。
+            if SensorManagementView.hasStoredData(deviceId: deviceId) {
+                Button {
                     showDataExistsWarning = true
-                } else {
-                    store.removeKnownDevice(deviceId)
+                } label: {
+                    Label("一覧から削除", systemImage: "trash")
                 }
-            } label: {
-                Label("一覧から削除", systemImage: "trash")
+            } else {
+                Button(role: .destructive) {
+                    store.removeKnownDevice(deviceId)
+                } label: {
+                    Label("一覧から削除", systemImage: "trash")
+                }
             }
 
             if store.nicknames[deviceId] != nil {

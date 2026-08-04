@@ -112,12 +112,15 @@ struct StoredDataGraphView: View {
             .padding()
         }
         .navigationTitle(file.displayKind)
-        .onAppear(perform: load)
-        .onChange(of: file.id) { _ in
+        .onAppear { load() }
+        .onChange(of: file) { _, newFile in
             // センサー種別のボタンでfileが切り替わった時、onAppearは再発火しないため
             // ここで明示的に再読込する。
+            // NOTE: self.fileを読むと更新前の値を拾ってしまうケースが確認されたため、
+            // onChangeが渡してくれる新しい値(newFile)をそのまま使う。
+            print("[Graph] onChange fired -> file.kind=\(newFile.kind) file=\(newFile.url.lastPathComponent)")
             isLoading = true
-            load()
+            load(targetFile: newFile)
         }
     }
 
@@ -177,33 +180,65 @@ struct StoredDataGraphView: View {
         )
     }
 
-    private func load() {
+    /// 直近に開始したload()のID。切り替えを連続で行った場合、古い(先に呼ばれた)
+    /// 読み込みの結果が後から届いて上書きしてしまう競合を防ぐためのガード。
+    @State private var currentLoadID = UUID()
+
+    private func load(targetFile: DataFileEntry? = nil) {
+        let loadID = UUID()
+        currentLoadID = loadID
+        let targetFile = targetFile ?? file
+        print("[Graph] ▶ load start kind=\(targetFile.kind) file=\(targetFile.url.lastPathComponent)")
         DispatchQueue.global(qos: .userInitiated).async {
-            switch file.kind {
+            let fileExists = FileManager.default.fileExists(atPath: targetFile.url.path)
+            switch targetFile.kind {
             case "hr":
-                let points = CsvDataLoader.loadHr(from: file.url)
+                let points = CsvDataLoader.loadHr(from: targetFile.url)
+                print("[Graph] hr points=\(points.count) fileExists=\(fileExists) file=\(targetFile.url.lastPathComponent)")
                 DispatchQueue.main.async {
+                    guard loadID == currentLoadID else {
+                        print("[Graph] ✗ hr load discarded (stale)")
+                        return
+                    }
                     hrPoints = points
                     setInitialDomain(first: points.first?.date, last: points.last?.date)
                     isLoading = false
                 }
             case "skintemp":
-                let points = CsvDataLoader.loadSkinTemp(from: file.url)
+                let points = CsvDataLoader.loadSkinTemp(from: targetFile.url)
+                print("[Graph] skintemp points=\(points.count) fileExists=\(fileExists) file=\(targetFile.url.lastPathComponent)")
                 DispatchQueue.main.async {
+                    guard loadID == currentLoadID else {
+                        print("[Graph] ✗ skintemp load discarded (stale)")
+                        return
+                    }
                     tempPoints = points
                     setInitialDomain(first: points.first?.date, last: points.last?.date)
                     isLoading = false
                 }
             case "acc":
-                let points = CsvDataLoader.loadAcc(from: file.url)
+                let points = CsvDataLoader.loadAcc(from: targetFile.url)
+                print("[Graph] acc points=\(points.count) fileExists=\(fileExists) file=\(targetFile.url.lastPathComponent)")
                 DispatchQueue.main.async {
+                    guard loadID == currentLoadID else {
+                        print("[Graph] ✗ acc load discarded (stale)")
+                        return
+                    }
                     accPoints = points
                     setInitialDomain(first: points.first?.date, last: points.last?.date)
                     isLoading = false
                 }
             case "events":
-                let lines = CsvDataLoader.loadEvents(from: file.url)
-                DispatchQueue.main.async { eventLines = lines; isLoading = false }
+                let lines = CsvDataLoader.loadEvents(from: targetFile.url)
+                print("[Graph] events lines=\(lines.count) fileExists=\(fileExists) file=\(targetFile.url.lastPathComponent)")
+                DispatchQueue.main.async {
+                    guard loadID == currentLoadID else {
+                        print("[Graph] ✗ events load discarded (stale)")
+                        return
+                    }
+                    eventLines = lines
+                    isLoading = false
+                }
             default:
                 DispatchQueue.main.async { isLoading = false }
             }

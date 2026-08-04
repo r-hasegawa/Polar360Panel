@@ -702,7 +702,12 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
                         let bpm = Int(sample.hr)
                         let now = Date()
                         self.heartRate = bpm
-                        self.csvLogger?.logHr(bpm)
+                        // オフラインモードでは、センサー内蔵の記録から後で正しいHRが
+                        // 抽出・保存されるため、ここでライブ書き込みすると同じ時間帯が
+                        // 二重にCSVへ記録されてしまう。画面表示の更新のみに留める。
+                        if self.mode == .online {
+                            self.csvLogger?.logHr(bpm)
+                        }
                         self.hrHistory.append(HrPoint(date: now, bpm: bpm))
                         self.trimOldHistory()
                     }
@@ -833,7 +838,7 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
 
                     stopPhase = .savingCsv(type: typeLabel)
                     print("[Offline] ▶ savingCsv start type=\(typeLabel) path=\(entry.path)")
-                    let result = await saveOfflineRecordingData(data)
+                    let result = saveOfflineRecordingData(data)
                     tally[result.label, default: 0] += result.count
                     if let first = result.first, earliest == nil || first < earliest! { earliest = first }
                     if let last = result.last, latest == nil || last > latest! { latest = last }
@@ -1039,77 +1044,44 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
     /// 取得したオフライン記録データの中身を種類別にCSVへ保存する。
     /// HRだけはサンプルごとのタイムスタンプを持たないため、startTimeから1Hz想定で近似する。
     /// 戻り値: (種類ラベル, サンプル数, 最初の日時, 最後の日時) — サマリー表示用
-    ///
-    /// NOTE: 以前は1サンプルごとに個別のqueue.async書き込みを行っていたが、
-    /// 加速度のように長時間分のデータが溜まっていると数十万〜100万件規模になり、
-    /// @MainActor上で一度もawaitを挟まない完全同期ループが数分単位で固まって見える
-    /// 原因になっていた。まとめてバッチ書き込みし、定期的にTask.yield()で
-    /// 実行を区切ることで、UIの応答性と進捗表示を保つようにしている。
-    @MainActor
-    private func saveOfflineRecordingData(_ data: PolarOfflineRecordingData) async -> (label: String, count: Int, first: Date?, last: Date?) {
+    private func saveOfflineRecordingData(_ data: PolarOfflineRecordingData) -> (label: String, count: Int, first: Date?, last: Date?) {
         switch data {
         case .hrOfflineRecordingData(let samples, let startTime):
-            print("[Offline] hr samples count=\(samples.count)")
-            var lines: [String] = []
-            lines.reserveCapacity(samples.count)
             var lastDate: Date?
             for (index, sample) in samples.enumerated() {
                 let approxDate = startTime.addingTimeInterval(Double(index))
-                lines.append("\(CsvLogger.isoString(approxDate)),\(sample.hr)")
+                csvLogger?.logHr(Int(sample.hr), at: approxDate)
                 lastDate = approxDate
             }
-            await csvLogger?.appendBatch(lines, kind: "hr", header: "timestamp,hr_bpm")
             return ("HR", samples.count, samples.isEmpty ? nil : startTime, lastDate)
-
         case .skinTemperatureOfflineRecordingData(let tempData, _):
-            print("[Offline] skinTemp samples count=\(tempData.samples.count)")
-            var lines: [String] = []
-            lines.reserveCapacity(tempData.samples.count)
             var first: Date?
             var last: Date?
             for sample in tempData.samples {
                 let date = polarEpochDate(nanoseconds: sample.timeStamp)
-                lines.append("\(CsvLogger.isoString(date)),\(String(format: "%.3f", sample.temperature))")
+                csvLogger?.logSkinTemperature(Double(sample.temperature), at: date)
                 if first == nil { first = date }
                 last = date
             }
-            await csvLogger?.appendBatch(lines, kind: "skintemp", header: "timestamp,skin_temperature_c")
             // 疑似リアルタイム表示用に、直近の値を画面にも反映する
             if let lastSample = tempData.samples.last {
                 self.skinTemperature = Double(lastSample.temperature)
             }
             return ("体表温", tempData.samples.count, first, last)
-
         case .accOfflineRecordingData(let accData, _, _):
-            print("[Offline] acc samples count=\(accData.count)")
             var first: Date?
             var last: Date?
-            let flushSize = 20_000
-            var batch: [(x: Int, y: Int, z: Int, date: Date)] = []
-            batch.reserveCapacity(min(accData.count, flushSize))
-            for (index, sample) in accData.enumerated() {
+            for sample in accData {
                 let date = polarEpochDate(nanoseconds: sample.timeStamp)
-                batch.append((x: Int(sample.x), y: Int(sample.y), z: Int(sample.z), date: date))
+                csvLogger?.logAcc(x: Int(sample.x), y: Int(sample.y), z: Int(sample.z), at: date)
                 if first == nil { first = date }
                 last = date
-                if batch.count >= flushSize {
-                    await csvLogger?.logAccBatch(batch)
-                    batch.removeAll(keepingCapacity: true)
-                    accProgress.currentPercent = accData.isEmpty ? 100 : min(100, Int(Double(index + 1) / Double(accData.count) * 100))
-                    // 完全同期ループのままだとUIが固まって見えるため、ここで一度制御を返す
-                    await Task.yield()
-                }
             }
-            if !batch.isEmpty {
-                await csvLogger?.logAccBatch(batch)
-            }
-            accProgress.currentPercent = 100
             if !accData.isEmpty {
                 // 「取得中」インジケータとして、直近の同期で実際にデータが取れたことを示す
                 self.isAccStreaming = true
             }
             return ("加速度", accData.count, first, last)
-
         case .emptyData:
             return ("(空)", 0, nil, nil)
         default:

@@ -128,22 +128,28 @@ struct OfflineSensorPanelView: View {
                 }
 
                 // 簡易な生存確認用(グラフではなく数値のみ)
+                // データ取得中(isSyncing)は、記録自体は既に停止しているにも関わらず
+                // 値が更新され続けて誤解を招くため、「--」表示に固定する。
                 HStack {
                     Text("HR")
                         .font(.caption).foregroundColor(.secondary)
-                    Text(viewModel.heartRate.map { "\($0) bpm" } ?? "--")
+                    Text(viewModel.isSyncing ? "-- bpm" : (viewModel.heartRate.map { "\($0) bpm" } ?? "--"))
                         .font(.title3).bold()
                 }
 
                 Divider()
 
                 // 記録状況(接続時に一度だけ確認。以降は「同期」ボタンで更新)
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(viewModel.isAccStreaming ? Color.green : Color.orange)
-                        .frame(width: 10, height: 10)
-                    Text(viewModel.recordingStatusText ?? "記録状況を確認中...")
-                        .font(.caption)
+                // データ取得中は、実際には記録が停止しているため、
+                // 誤解を招く「記録中」表示を隠す。
+                if !viewModel.isSyncing {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(viewModel.isAccStreaming ? Color.green : Color.orange)
+                            .frame(width: 10, height: 10)
+                        Text(viewModel.recordingStatusText ?? "記録状況を確認中...")
+                            .font(.caption)
+                    }
                 }
 
                 // 計測終了時の取得結果(接続中は特に何も起きない。取得は計測終了時のみ)

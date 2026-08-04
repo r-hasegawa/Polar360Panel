@@ -8,6 +8,8 @@ struct OfflineDashboardView: View {
     @State private var nextSlotIndex: Int = 0
     @State private var showUsageGuide = false
     @State private var showModeChangeConfirmation = false
+    @State private var pendingStopSlot: SensorSlotViewModel?
+    @State private var showMultiSyncConfirm = false
 
     private let slotIndicesKey = "offlineSlotIndices"
 
@@ -16,6 +18,10 @@ struct OfflineDashboardView: View {
         stride(from: 0, to: slots.count, by: gridColumns).map {
             Array(slots[$0..<min($0 + gridColumns, slots.count)])
         }
+    }
+
+    private var syncingCount: Int {
+        slots.filter { $0.isSyncing }.count
     }
 
     var body: some View {
@@ -40,6 +46,12 @@ struct OfflineDashboardView: View {
                 }
                 .font(.caption)
             }
+            // 常時表示の注意書き(A)。押しつけがましくならないよう小さく・さりげなく。
+            Text("複数台同時に計測終了すると処理が遅くなることがあります(データが消えることはありません)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             GeometryReader { geo in
                 ScrollView {
                     Grid(horizontalSpacing: 6, verticalSpacing: 6) {
@@ -48,9 +60,11 @@ struct OfflineDashboardView: View {
                                 ForEach(0..<gridColumns, id: \.self) { colIndex in
                                     if colIndex < rows[rowIndex].count {
                                         let slot = rows[rowIndex][colIndex]
-                                        OfflineSensorPanelView(viewModel: slot) {
-                                            removeSlot(slot)
-                                        }
+                                        OfflineSensorPanelView(
+                                            viewModel: slot,
+                                            onRemove: { removeSlot(slot) },
+                                            onRequestStop: { requestStop(for: slot) }
+                                        )
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     } else {
                                         Color.clear
@@ -82,6 +96,18 @@ struct OfflineDashboardView: View {
         } message: {
             Text("計測中のパネルがあります。センサー内蔵の記録はそのまま継続されますが、アプリ側の表示(残り容量・記録状況など)はリセットされます。")
         }
+        // 複数台同時実行時の確認(B)。実際にもう1台以上が同期中の時だけ出す。
+        .alert("他に\(syncingCount)台が同期中です", isPresented: $showMultiSyncConfirm) {
+            Button("キャンセル", role: .cancel) {
+                pendingStopSlot = nil
+            }
+            Button("同時に進める") {
+                pendingStopSlot?.stopMeasurement()
+                pendingStopSlot = nil
+            }
+        } message: {
+            Text("同時に進めると処理が遅くなることがあります。データが消えることはありませんが、途中でアプリを終了した場合、その時点で処理中だったセンサーの分だけ、もう一度同じ抽出をやり直す必要があります。")
+        }
     }
 
     private func loadOrCreateInitialSlots() {
@@ -108,6 +134,18 @@ struct OfflineDashboardView: View {
         guard slot.state == .idle else { return } // 念のため、未接続時だけ削除可能
         slots.removeAll { $0.id == slot.id }
         persistSlotIndices()
+    }
+
+    /// 「計測終了」が押された時の入り口。他に同期中のセンサーがいなければそのまま進め、
+    /// いれば確認アラートを挟む。
+    private func requestStop(for slot: SensorSlotViewModel) {
+        let othersSyncing = slots.filter { $0.id != slot.id && $0.isSyncing }.count
+        if othersSyncing > 0 {
+            pendingStopSlot = slot
+            showMultiSyncConfirm = true
+        } else {
+            slot.stopMeasurement()
+        }
     }
 
     private func requestChangeMode() {

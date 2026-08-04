@@ -810,7 +810,16 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
             for try await entry in api.listOfflineRecordings(deviceId) {
                 entries.append(entry)
             }
-            entries.sort { $0.date < $1.date }
+            // 種類優先(データ量が軽く処理が速いHR→体表温→加速度の順)で並べ、
+            // 同じ種類内では記録開始時刻の早い順にする。
+            // 万が一途中で処理が滞っても、少なくとも軽いHR・体表温は先に
+            // 回収・消去し終えられるようにするための優先順位。
+            entries.sort { lhs, rhs in
+                let lhsPriority = typePriority(lhs.type)
+                let rhsPriority = typePriority(rhs.type)
+                if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+                return lhs.date < rhs.date
+            }
 
             // 種類ごとの合計件数を先に数えておく(「(1/2件)」のような表示のため)
             hrProgress = TypeProgress(totalCount: entries.filter { $0.type == .hr }.count)
@@ -838,7 +847,7 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
 
                     stopPhase = .savingCsv(type: typeLabel)
                     print("[Offline] ▶ savingCsv start type=\(typeLabel) path=\(entry.path)")
-                    let result = saveOfflineRecordingData(data)
+                    let result = await saveOfflineRecordingData(data)
                     tally[result.label, default: 0] += result.count
                     if let first = result.first, earliest == nil || first < earliest! { earliest = first }
                     if let last = result.last, latest == nil || last > latest! { latest = last }
@@ -846,7 +855,11 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
 
                     stopPhase = .erasingMemory(type: typeLabel)
                     print("[Offline] ▶ erasingMemory start type=\(typeLabel) path=\(entry.path)")
-                    let removed = await withTimeout(seconds: 20) {
+                    // 複数センサーを同時に同期するとBLE帯域が混み合い、20秒では
+                    // 「応答が返る前にアプリ側が諦めてしまう」誤検知が起きやすかったため延長。
+                    // なお、タイムアウトしてもCSV保存自体は既に完了済みなのでデータロスは無く、
+                    // 実際にはセンサー側の消去処理自体は継続していることが多い(後述のメッセージ参照)。
+                    let removed = await withTimeout(seconds: 45) {
                         try await self.api.removeOfflineRecord(deviceId, entry: entry)
                     }
                     if removed != nil {
@@ -897,6 +910,18 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
         case .skinTemperature: return "体表温"
         case .acc: return "加速度"
         default: return "\(type)"
+        }
+    }
+
+    /// 抽出処理の優先順位(小さいほど先に処理する)。
+    /// データ量が軽く処理が速い順(HR→体表温→加速度)にしておくことで、
+    /// 途中で問題が起きても軽いものは先に回収・消去できているようにする。
+    private func typePriority(_ type: PolarDeviceDataType) -> Int {
+        switch type {
+        case .hr: return 0
+        case .skinTemperature: return 1
+        case .acc: return 2
+        default: return 3
         }
     }
 
@@ -1015,7 +1040,12 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
 
     private func buildSyncSummary(successCount: Int, failCount: Int, tally: [String: Int], earliest: Date?, latest: Date?) -> String {
         if failCount > 0 {
-            return "\(successCount)件成功 / \(failCount)件失敗"
+            // failCountは「データ抽出の失敗」ではなく「センサー内蔵メモリの消去が
+            // 時間内に完了しなかった」ことを指す。CSV保存自体は既に完了済みなので、
+            // データが失われたわけではないことを明示する。
+            return "データ取得は完了しました(\(successCount)件消去済み / \(failCount)件は消去に時間がかかっています)。"
+                + "しばらくしてから再度接続すると自動的に解消される場合がありますが、"
+                + "解消しない場合はセンサー管理画面の「メモリ消去」から削除してください。"
         } else if tally.isEmpty {
             return "取得対象なし(最新)"
         } else {
@@ -1044,44 +1074,80 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
     /// 取得したオフライン記録データの中身を種類別にCSVへ保存する。
     /// HRだけはサンプルごとのタイムスタンプを持たないため、startTimeから1Hz想定で近似する。
     /// 戻り値: (種類ラベル, サンプル数, 最初の日時, 最後の日時) — サマリー表示用
-    private func saveOfflineRecordingData(_ data: PolarOfflineRecordingData) -> (label: String, count: Int, first: Date?, last: Date?) {
+    /// 取得したオフライン記録データの中身を種類別にCSVへ保存する。
+    /// HRだけはサンプルごとのタイムスタンプを持たないため、startTimeから1Hz想定で近似する。
+    /// 戻り値: (種類ラベル, サンプル数, 最初の日時, 最後の日時) — サマリー表示用
+    ///
+    /// NOTE: 加速度のように長時間分のデータが溜まっていると数十万〜100万件規模になり、
+    /// @MainActor上で一度もawaitを挟まない完全同期ループが数分単位で固まって見える
+    /// (最悪の場合、iOSに強制終了・サスペンドされてデータが途中までしか保存されない)
+    /// 原因になっていたため、まとめてバッチ書き込みし、定期的にTask.yield()で
+    /// 実行を区切っている。
+    @MainActor
+    private func saveOfflineRecordingData(_ data: PolarOfflineRecordingData) async -> (label: String, count: Int, first: Date?, last: Date?) {
         switch data {
         case .hrOfflineRecordingData(let samples, let startTime):
+            print("[Offline] hr samples count=\(samples.count)")
+            var lines: [String] = []
+            lines.reserveCapacity(samples.count)
             var lastDate: Date?
             for (index, sample) in samples.enumerated() {
                 let approxDate = startTime.addingTimeInterval(Double(index))
-                csvLogger?.logHr(Int(sample.hr), at: approxDate)
+                lines.append("\(CsvLogger.isoString(approxDate)),\(sample.hr)")
                 lastDate = approxDate
             }
+            await csvLogger?.appendBatch(lines, kind: "hr", header: "timestamp,hr_bpm")
             return ("HR", samples.count, samples.isEmpty ? nil : startTime, lastDate)
+
         case .skinTemperatureOfflineRecordingData(let tempData, _):
+            print("[Offline] skinTemp samples count=\(tempData.samples.count)")
+            var lines: [String] = []
+            lines.reserveCapacity(tempData.samples.count)
             var first: Date?
             var last: Date?
             for sample in tempData.samples {
                 let date = polarEpochDate(nanoseconds: sample.timeStamp)
-                csvLogger?.logSkinTemperature(Double(sample.temperature), at: date)
+                lines.append("\(CsvLogger.isoString(date)),\(String(format: "%.3f", sample.temperature))")
                 if first == nil { first = date }
                 last = date
             }
+            await csvLogger?.appendBatch(lines, kind: "skintemp", header: "timestamp,skin_temperature_c")
             // 疑似リアルタイム表示用に、直近の値を画面にも反映する
             if let lastSample = tempData.samples.last {
                 self.skinTemperature = Double(lastSample.temperature)
             }
             return ("体表温", tempData.samples.count, first, last)
+
         case .accOfflineRecordingData(let accData, _, _):
+            print("[Offline] acc samples count=\(accData.count)")
             var first: Date?
             var last: Date?
-            for sample in accData {
+            let flushSize = 20_000
+            var batch: [(x: Int, y: Int, z: Int, date: Date)] = []
+            batch.reserveCapacity(min(accData.count, flushSize))
+            for (index, sample) in accData.enumerated() {
                 let date = polarEpochDate(nanoseconds: sample.timeStamp)
-                csvLogger?.logAcc(x: Int(sample.x), y: Int(sample.y), z: Int(sample.z), at: date)
+                batch.append((x: Int(sample.x), y: Int(sample.y), z: Int(sample.z), date: date))
                 if first == nil { first = date }
                 last = date
+                if batch.count >= flushSize {
+                    await csvLogger?.logAccBatch(batch)
+                    batch.removeAll(keepingCapacity: true)
+                    accProgress.currentPercent = accData.isEmpty ? 100 : min(100, Int(Double(index + 1) / Double(accData.count) * 100))
+                    // 完全同期ループのままだとUIが固まって見えるため、ここで一度制御を返す
+                    await Task.yield()
+                }
             }
+            if !batch.isEmpty {
+                await csvLogger?.logAccBatch(batch)
+            }
+            accProgress.currentPercent = 100
             if !accData.isEmpty {
                 // 「取得中」インジケータとして、直近の同期で実際にデータが取れたことを示す
                 self.isAccStreaming = true
             }
             return ("加速度", accData.count, first, last)
+
         case .emptyData:
             return ("(空)", 0, nil, nil)
         default:

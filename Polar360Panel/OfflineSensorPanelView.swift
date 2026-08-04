@@ -9,6 +9,9 @@ struct OfflineSensorPanelView: View {
     /// 台数を可変にできるオフラインモード専用。未接続時にこのパネル自体を
     /// 削除したい時に呼ばれる(nilならボタンを出さない=オンライン側では未使用)。
     var onRemove: (() -> Void)? = nil
+    /// 台数が可変のオフラインモードで、複数センサー同時実行時の確認を
+    /// ダッシュボード側で挟みたい場合に使う。nilなら直接stopMeasurement()を呼ぶ。
+    var onRequestStop: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -407,7 +410,11 @@ struct OfflineSensorPanelView: View {
                     .foregroundColor(.red)
 
                 Button(viewModel.isSyncing ? "取得中..." : "計測終了") {
-                    viewModel.stopMeasurement()
+                    if let onRequestStop {
+                        onRequestStop()
+                    } else {
+                        viewModel.stopMeasurement()
+                    }
                 }
                 .font(.caption)
                 .foregroundColor(.white)

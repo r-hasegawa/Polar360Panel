@@ -17,6 +17,7 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
 
     private var api: PolarBleApi { PolarManager.shared.api }
     private var isConnected = false
+    private var pairingErrorOccurred = false
 
     func handleConnecting() {}
 
@@ -26,6 +27,9 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
 
     func handleDisconnected(pairingError: Bool) {
         isConnected = false
+        if pairingError {
+            pairingErrorOccurred = true
+        }
     }
 
     func handleFeatureReady(_ feature: PolarBleSdkFeature) {
@@ -43,6 +47,7 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
         resultLines = []
         errorText = nil
         isConnected = false
+        pairingErrorOccurred = false
         batteryLevel = nil
 
         PolarManager.shared.register(slot: self, forDeviceId: deviceId)
@@ -56,10 +61,24 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
             return
         }
 
-        // 接続完了を待つ(最大10秒)
-        let connected = await waitUntil(timeoutSeconds: 10) { [weak self] in self?.isConnected == true }
-        guard connected else {
-            errorText = "接続がタイムアウトしました"
+        // 接続完了を待つ(最大10秒。ペアリングエラーが分かった時点で早期終了)
+        _ = await waitUntil(timeoutSeconds: 10) { [weak self] in
+            guard let self else { return true }
+            return self.isConnected || self.pairingErrorOccurred
+        }
+        // 切断コールバック自体が来ないまま(=isConnectedもpairingErrorOccurredもfalseのまま)
+        // タイムアウトすることがあるため、諦める前にもう一度確認しておく。
+        if !isConnected && !pairingErrorOccurred {
+            pairingErrorOccurred = (try? api.checkIfDeviceDisconnectedDueRemovedPairing(deviceId)) ?? false
+        }
+        if pairingErrorOccurred {
+            errorText = "ペアリング解除により接続できませんでした。設定アプリのBluetoothでこのセンサーとのペアリングを解除してから、もう一度お試しください。"
+            isChecking = false
+            cleanUp(deviceId: deviceId)
+            return
+        }
+        guard isConnected else {
+            errorText = "接続がタイムアウトしました(センサーが見つからない可能性があります)"
             isChecking = false
             cleanUp(deviceId: deviceId)
             return

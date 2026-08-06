@@ -68,10 +68,17 @@ final class PolarManager: NSObject, ObservableObject,
     func startScan() {
         discoveredDevices = []
         scanTask?.cancel()
+        // SDK内部に溜まった「使用していない既知デバイス」の情報をリセットしてからスキャンする。
+        // (未接続センサーが見つからない問題の切り分け用)
+        api.cleanup()
         scanTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                for try await info in self.api.searchForDevice() {
+                // デバッグのため一時的にSDK側の名前フィルターを外し、全デバイスを見る。
+                // (一度も接続したことのないセンサーが、名前フィルターのせいで
+                // リストに出てこないのではないかを確認するため)
+                for try await info in self.api.searchForDevice(withNameContaining: nil) {
+                    print("[Scan-debug] name='\(info.name)' id=\(info.deviceId)")
                     if info.name.contains("Polar"),
                        !self.discoveredDevices.contains(where: { $0.deviceId == info.deviceId }) {
                         print("[Scan] found \(info.name) hasSAGRFCFileSystem=\(info.hasSAGRFCFileSystem)")
@@ -108,8 +115,14 @@ final class PolarManager: NSObject, ObservableObject,
     }
 
     func deviceDisconnected(_ polarDeviceInfo: PolarDeviceInfo, pairingError: Bool) {
+        // SDKが渡してくるpairingErrorだけだと、実際にはペアリング解除が原因でも
+        // falseのまま(単なるタイムアウト扱い)になることがあるため、
+        // checkIfDeviceDisconnectedDueRemovedPairingでも重ねて確認し、
+        // どちらかがtrueならペアリング解除扱いにする。
+        let confirmedByCheck = (try? api.checkIfDeviceDisconnectedDueRemovedPairing(polarDeviceInfo.deviceId)) ?? false
+        let effectivePairingError = pairingError || confirmedByCheck
         DispatchQueue.main.async { [weak self] in
-            self?.slots[polarDeviceInfo.deviceId]?.handleDisconnected(pairingError: pairingError)
+            self?.slots[polarDeviceInfo.deviceId]?.handleDisconnected(pairingError: effectivePairingError)
         }
     }
 

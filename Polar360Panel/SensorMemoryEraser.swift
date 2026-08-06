@@ -16,10 +16,16 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
 
     private var api: PolarBleApi { PolarManager.shared.api }
     private var isConnected = false
+    private var pairingErrorOccurred = false
 
     func handleConnecting() {}
     func handleConnected() { isConnected = true }
-    func handleDisconnected(pairingError: Bool) { isConnected = false }
+    func handleDisconnected(pairingError: Bool) {
+        isConnected = false
+        if pairingError {
+            pairingErrorOccurred = true
+        }
+    }
     func handleFeatureReady(_ feature: PolarBleSdkFeature) {}
 
     func erase(deviceId: String) async {
@@ -32,6 +38,7 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
         resultText = nil
         errorText = nil
         isConnected = false
+        pairingErrorOccurred = false
 
         PolarManager.shared.register(slot: self, forDeviceId: deviceId)
 
@@ -44,9 +51,24 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
             return
         }
 
-        let connected = await waitUntil(timeoutSeconds: 10) { [weak self] in self?.isConnected == true }
-        guard connected else {
-            errorText = "接続がタイムアウトしました"
+        // 接続完了を待つ(最大10秒。ペアリングエラーが分かった時点で早期終了)
+        _ = await waitUntil(timeoutSeconds: 10) { [weak self] in
+            guard let self else { return true }
+            return self.isConnected || self.pairingErrorOccurred
+        }
+        // 切断コールバック自体が来ないまま(=isConnectedもpairingErrorOccurredもfalseのまま)
+        // タイムアウトすることがあるため、諦める前にもう一度確認しておく。
+        if !isConnected && !pairingErrorOccurred {
+            pairingErrorOccurred = (try? api.checkIfDeviceDisconnectedDueRemovedPairing(deviceId)) ?? false
+        }
+        if pairingErrorOccurred {
+            errorText = "ペアリング解除により接続できませんでした。設定アプリのBluetoothでこのセンサーとのペアリングを解除してから、もう一度お試しください。"
+            isErasing = false
+            cleanUp(deviceId: deviceId)
+            return
+        }
+        guard isConnected else {
+            errorText = "接続がタイムアウトしました(センサーが見つからない可能性があります)"
             isErasing = false
             cleanUp(deviceId: deviceId)
             return
@@ -77,12 +99,37 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
             errorText = "一覧の取得に失敗しました: \(error.localizedDescription)"
         }
 
-        if errorText == nil {
-            if failedCount == 0 {
-                resultText = deletedCount > 0 ? "\(deletedCount)件の記録を削除しました" : "削除対象の記録はありませんでした"
-            } else {
-                resultText = "\(deletedCount)件削除 / \(failedCount)件失敗"
+        // このアプリが明示的に取得しているHR/体表温/加速度のオフライン記録とは別に、
+        // センサーが自動で集めている活動量・自動サンプリング・睡眠・体表温サマリー等の
+        // データも消しておく。このアプリでは一切利用しないデータだが、放置すると
+        // センサー内に残り続けてしまう(工場リセットでしか消えない)ため、こちらも対象にする。
+        let storedDataTypesToDelete: [PolarStoredDataType.StoredDataType] = [
+            .ACTIVITY, .AUTO_SAMPLE, .DAILY_SUMMARY, .NIGHTLY_RECOVERY,
+            .SLEEP, .SLEEP_SCORE, .SKIN_CONTACT_CHANGES, .SKINTEMP
+        ]
+        var storedDataDeletedCount = 0
+        var storedDataFailedCount = 0
+        for dataType in storedDataTypesToDelete {
+            do {
+                try await api.deleteStoredDeviceData(deviceId, dataType: dataType, until: nil)
+                storedDataDeletedCount += 1
+            } catch {
+                // 該当データが元々存在しない場合もエラーになりうるため、
+                // ここでは「失敗」として数えるだけで処理は継続する。
+                storedDataFailedCount += 1
             }
+        }
+
+        if errorText == nil {
+            var summary = deletedCount > 0 ? "\(deletedCount)件の記録を削除" : "削除対象の記録はありません"
+            if failedCount > 0 {
+                summary += "(\(failedCount)件失敗)"
+            }
+            summary += " / センサー内の自動収集データ\(storedDataDeletedCount)種類を削除"
+            if storedDataFailedCount > 0 {
+                summary += "(\(storedDataFailedCount)種類は対象なしまたは失敗)"
+            }
+            resultText = summary
         }
 
         isErasing = false

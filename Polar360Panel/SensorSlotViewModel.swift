@@ -882,6 +882,26 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
         } catch {
             print("[Offline] listOfflineRecordings failed: \(error)")
         }
+
+        // このアプリが明示的に取得しているHR/体表温/加速度のオフライン記録とは別に、
+        // センサーが自動で集めている活動量・自動サンプリング・睡眠・体表温サマリー等の
+        // データも消しておく。このアプリでは一切利用しないデータだが、放置すると
+        // センサー内に残り続けてしまう(工場リセットでしか消えない)ため、計測終了の度に併せて消す。
+        let storedDataTypesToDelete: [PolarStoredDataType.StoredDataType] = [
+            .ACTIVITY, .AUTO_SAMPLE, .DAILY_SUMMARY, .NIGHTLY_RECOVERY,
+            .SLEEP, .SLEEP_SCORE, .SKIN_CONTACT_CHANGES, .SKINTEMP
+        ]
+        var storedDataDeletedCount = 0
+        for dataType in storedDataTypesToDelete {
+            do {
+                try await api.deleteStoredDeviceData(deviceId, dataType: dataType, until: nil)
+                storedDataDeletedCount += 1
+            } catch {
+                // 該当データが元々存在しない場合もエラーになりうるため、ログだけ残して続行する。
+            }
+        }
+        csvLogger?.logEvent("auto_collected_data_cleanup deleted=\(storedDataDeletedCount)/\(storedDataTypesToDelete.count)")
+
         stopPhase = .done
         return (successCount, failCount, tally, earliest, latest)
     }
@@ -994,6 +1014,16 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
             } catch {
                 print("[Offline] pending data delete: listOfflineRecordings failed: \(error)")
             }
+
+            // こちらも同様に、センサーが自動で集めているオフライン記録以外のデータを消しておく。
+            let storedDataTypesToDelete: [PolarStoredDataType.StoredDataType] = [
+                .ACTIVITY, .AUTO_SAMPLE, .DAILY_SUMMARY, .NIGHTLY_RECOVERY,
+                .SLEEP, .SLEEP_SCORE, .SKIN_CONTACT_CHANGES, .SKINTEMP
+            ]
+            for dataType in storedDataTypesToDelete {
+                try? await self.api.deleteStoredDeviceData(deviceId, dataType: dataType, until: nil)
+            }
+
             print("[Offline] pending data deleted(未取得のまま破棄) count=\(deletedCount) failed=\(failedCount)")
             self.csvLogger?.logEvent("pending_data_deleted count=\(deletedCount) failed=\(failedCount)")
             let summary = "\(deletedCount)件削除(未取得のまま破棄) / \(failedCount)件失敗"

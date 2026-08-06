@@ -78,14 +78,15 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
         for feature: PolarDeviceDataType in [.hr, .skinTemperature, .acc] {
             try? await api.stopOfflineRecording(deviceId, feature: feature)
         }
+        // stopOfflineRecording直後はファイル転送チャネルがまだ落ち着いていないことがあり、
+        // 続けてlistOfflineRecordingsを呼ぶと(PolarError 8: unableToStartStreaming)で
+        // 失敗することがあるため、少し待ってから開始する。
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
 
         var deletedCount = 0
         var failedCount = 0
         do {
-            var entries: [PolarOfflineRecordingEntry] = []
-            for try await entry in api.listOfflineRecordings(deviceId) {
-                entries.append(entry)
-            }
+            let entries = try await listOfflineRecordingsWithRetry(deviceId: deviceId)
             for entry in entries {
                 do {
                     // 取得(getOfflineRecord)は行わず、そのまま削除する(データは失われる)
@@ -99,37 +100,16 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
             errorText = "一覧の取得に失敗しました: \(error.localizedDescription)"
         }
 
-        // このアプリが明示的に取得しているHR/体表温/加速度のオフライン記録とは別に、
-        // センサーが自動で集めている活動量・自動サンプリング・睡眠・体表温サマリー等の
-        // データも消しておく。このアプリでは一切利用しないデータだが、放置すると
-        // センサー内に残り続けてしまう(工場リセットでしか消えない)ため、こちらも対象にする。
-        let storedDataTypesToDelete: [PolarStoredDataType.StoredDataType] = [
-            .ACTIVITY, .AUTO_SAMPLE, .DAILY_SUMMARY, .NIGHTLY_RECOVERY,
-            .SLEEP, .SLEEP_SCORE, .SKIN_CONTACT_CHANGES, .SKINTEMP
-        ]
-        var storedDataDeletedCount = 0
-        var storedDataFailedCount = 0
-        for dataType in storedDataTypesToDelete {
-            do {
-                try await api.deleteStoredDeviceData(deviceId, dataType: dataType, until: nil)
-                storedDataDeletedCount += 1
-            } catch {
-                // 該当データが元々存在しない場合もエラーになりうるため、
-                // ここでは「失敗」として数えるだけで処理は継続する。
-                storedDataFailedCount += 1
-            }
-        }
+        // NOTE: 自動収集データ(deleteStoredDeviceData)の削除は試したが、.ACTIVITYと.AUTO_SAMPLEで
+        // SDK内部のfatal error(強制アンラップ)によりクラッシュすることを確認したため、
+        // 安全に使えないと判断し対応を見送った。オフライン記録の削除のみを行う元の形に戻す。
 
         if errorText == nil {
-            var summary = deletedCount > 0 ? "\(deletedCount)件の記録を削除" : "削除対象の記録はありません"
-            if failedCount > 0 {
-                summary += "(\(failedCount)件失敗)"
+            if failedCount == 0 {
+                resultText = deletedCount > 0 ? "\(deletedCount)件の記録を削除しました" : "削除対象の記録はありませんでした"
+            } else {
+                resultText = "\(deletedCount)件削除 / \(failedCount)件失敗"
             }
-            summary += " / センサー内の自動収集データ\(storedDataDeletedCount)種類を削除"
-            if storedDataFailedCount > 0 {
-                summary += "(\(storedDataFailedCount)種類は対象なしまたは失敗)"
-            }
-            resultText = summary
         }
 
         isErasing = false
@@ -149,5 +129,24 @@ final class SensorMemoryEraser: ObservableObject, PolarDeviceEventReceiver {
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
         return condition()
+    }
+
+    /// listOfflineRecordingsは接続直後だと(PolarError 8: unableToStartStreaming)で
+    /// 失敗することがあるため、1回だけ間を置いてリトライする。
+    private func listOfflineRecordingsWithRetry(deviceId: String) async throws -> [PolarOfflineRecordingEntry] {
+        do {
+            var entries: [PolarOfflineRecordingEntry] = []
+            for try await entry in api.listOfflineRecordings(deviceId) {
+                entries.append(entry)
+            }
+            return entries
+        } catch {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            var entries: [PolarOfflineRecordingEntry] = []
+            for try await entry in api.listOfflineRecordings(deviceId) {
+                entries.append(entry)
+            }
+            return entries
+        }
     }
 }

@@ -330,8 +330,26 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
                     .allSatisfy { status[$0] == true }
                 print("[Config] offline resume check status=\(status) allActive=\(allActive)")
                 if allActive {
-                    csvLogger?.logEvent("offline_recording_already_active_resuming")
-                    startMeasurementAfterConfiguring()
+                    // 実際にセンサー側で加速度が動いているかどうかをここで反映する。
+                    // measureAccをデフォルト値(true)のまま先に進めると、以前は
+                    // 「加速度を計測しない」設定だった場合でも、後段の
+                    // startOfflineRecordingIfNeeded()がstatus[.acc] != trueを見て
+                    // 新規に加速度記録を開始してしまう(=再開のはずが勝手に加速度計測が
+                    // オンになる)。ここで実測状態に合わせておくことで、
+                    // 「再開時は今ある記録に触らない」を徹底する。
+                    let accActive = status[.acc] == true
+                    measureAcc = accActive
+                    // Hzの参考表示(実測はできないため、最後にこのアプリから指示した値を復元する)。
+                    if let lastSkinTempHz = LastMeasurementSettingsStore.shared.lastSkinTempHz(for: deviceId) {
+                        selectedSkinTempRateHz = lastSkinTempHz
+                    }
+                    if accActive, let lastAccHz = LastMeasurementSettingsStore.shared.lastAccHz(for: deviceId) {
+                        selectedAccRateHz = lastAccHz
+                    }
+                    csvLogger?.logEvent("offline_recording_already_active_resuming measureAcc=\(measureAcc)")
+                    // 今回は新たに設定を指示したわけではないので、LastMeasurementSettingsStoreは
+                    // 上書きしない(recordSettings: false)。
+                    startMeasurementAfterConfiguring(recordSettings: false)
                     return
                 }
                 // 記録は動いていない。センサー内に前回未取得のまま残っているデータがないか確認する。
@@ -407,11 +425,16 @@ final class SensorSlotViewModel: ObservableObject, Identifiable, PolarDeviceEven
         showAccRiskWarning = false
     }
 
-    private func startMeasurementAfterConfiguring() {
+    /// - Parameter recordSettings: LastMeasurementSettingsStoreへの記録を行うかどうか。
+    ///   ユーザーが実際にHz等を選んで計測開始した場合はtrue(デフォルト)。
+    ///   一方、オフライン再開(既に記録中のセンサーへ再接続しただけ)の場合は、
+    ///   今回何も新しく指示していないため、falseを渡してデフォルト値での
+    ///   誤った上書きを防ぐ。
+    private func startMeasurementAfterConfiguring(recordSettings: Bool = true) {
         guard let deviceId else { return }
         state = .connected
         csvLogger?.logEvent("measurement_started skinTempHz=\(selectedSkinTempRateHz) accHz=\(selectedAccRateHz)")
-        if mode == .offline {
+        if mode == .offline, recordSettings {
             LastMeasurementSettingsStore.shared.record(
                 deviceId: deviceId,
                 skinTempHz: selectedSkinTempRateHz,

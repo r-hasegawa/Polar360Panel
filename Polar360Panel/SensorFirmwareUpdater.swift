@@ -99,7 +99,7 @@ final class SensorFirmwareUpdater: ObservableObject, PolarDeviceEventReceiver {
             return
         }
 
-        let current = await readFirmwareVersion(deviceId: deviceId, timeoutSeconds: 5)
+        let current = await PolarManager.shared.waitForFirmwareVersion(deviceId: deviceId)
 
         do {
             var result: CheckFirmwareUpdateStatus?
@@ -146,7 +146,7 @@ final class SensorFirmwareUpdater: ObservableObject, PolarDeviceEventReceiver {
         }
 
         phase = .updating(step: "センサーの状態を確認中", detail: nil, percent: nil)
-        let versionBefore = await readFirmwareVersion(deviceId: deviceId, timeoutSeconds: 5)
+        let versionBefore = await PolarManager.shared.waitForFirmwareVersion(deviceId: deviceId)
         if let blocker = await updateBlocker(deviceId: deviceId) {
             finish(deviceId: deviceId, failure: blocker)
             return
@@ -284,19 +284,12 @@ final class SensorFirmwareUpdater: ObservableObject, PolarDeviceEventReceiver {
         for attempt in 0..<3 {
             try? await Task.sleep(nanoseconds: attempt == 0 ? 3_000_000_000 : 8_000_000_000)
             if await connect(deviceId: deviceId, requireFirmwareFeature: false) == nil,
-               let version = await readFirmwareVersion(deviceId: deviceId, timeoutSeconds: 10) {
+               let version = await PolarManager.shared.waitForFirmwareVersion(deviceId: deviceId) {
                 return version
             }
             cleanUp(deviceId: deviceId)
         }
         return nil
-    }
-
-    private func readFirmwareVersion(deviceId: String, timeoutSeconds: Double) async -> String? {
-        _ = await waitUntil(timeoutSeconds: timeoutSeconds) {
-            PolarManager.shared.firmwareVersion(for: deviceId) != nil
-        }
-        return PolarManager.shared.firmwareVersion(for: deviceId)
     }
 
     private func finish(deviceId: String, success message: String) {

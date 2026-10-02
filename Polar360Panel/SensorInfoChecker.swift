@@ -99,8 +99,7 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
         var lines: [String] = []
 
         // ファームウェアバージョンは接続時にSDKがDISを読んで通知してくる(PolarManagerが保持)。
-        if await waitUntil(timeoutSeconds: 5, condition: { PolarManager.shared.firmwareVersion(for: deviceId) != nil }),
-           let firmware = PolarManager.shared.firmwareVersion(for: deviceId) {
+        if let firmware = await PolarManager.shared.waitForFirmwareVersion(deviceId: deviceId) {
             lines.append("ファームウェア: \(firmware)")
         } else {
             lines.append("ファームウェア: 取得できず")

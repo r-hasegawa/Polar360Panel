@@ -77,6 +77,23 @@ final class PolarManager: NSObject, ObservableObject,
         firmwareVersions[deviceId] = nil
     }
 
+    /// DISのファームウェアバージョン通知が届くまで待つ。
+    /// Polar 360は接続後のサービス検出に時間がかかることがあるため、長めに待つ。
+    /// 原因切り分けのため、届くまでの時間/タイムアウトをログに出す。
+    @MainActor
+    func waitForFirmwareVersion(deviceId: String, timeoutSeconds: Double = 15) async -> String? {
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeoutSeconds {
+            if let version = firmwareVersions[deviceId] {
+                print("[DIS] firmware \(version) id=\(deviceId) (\(String(format: "%.1f", Date().timeIntervalSince(start)))秒で取得)")
+                return version
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        print("[DIS] firmware timeout id=\(deviceId) (\(Int(timeoutSeconds))秒待っても2A28が届かず)")
+        return firmwareVersions[deviceId]
+    }
+
     // MARK: - スキャン
     // searchForDevice() は AsyncThrowingStream を返す(8.1時点)。
     // Polar 360 は BLE アドバタイズ名が "Polar 360 xxxxxxxx" のような形式なので "Polar" で絞り込み。
@@ -161,8 +178,12 @@ final class PolarManager: NSObject, ObservableObject,
     }
 
     func disInformationReceivedWithKeysAsStrings(_ identifier: String, key: String, value: String) {
-        // 2A26 = Firmware Revision String。センサー管理画面の情報表示・FW更新後の確認に使う。
-        guard key.uppercased() == "2A26" else { return }
+        // DISの全項目をログに出す(ファームウェアが取得できない時の切り分け用)
+        print("[DIS] id=\(identifier) key=\(key) value=\(value)")
+        // Polar 360は2A26(Firmware Revision)を返さず、2A28(Software Revision)がファームウェアの
+        // バージョンになっている(実機ログで確認。Polar公式サンプルアプリも2A28をFWバージョンとして扱う)。
+        // センサー管理画面の情報表示・FW更新後の確認に使う。
+        guard key.uppercased() == "2A28" else { return }
         let version = value.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
         DispatchQueue.main.async { [weak self] in
             self?.firmwareVersions[identifier] = version

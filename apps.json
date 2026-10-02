@@ -11,6 +11,12 @@
       "iconURL": "https://raw.githubusercontent.com/r-hasegawa/Polar360Panel/main/AppIcon.png",
       "versions": [
         {
+          "version": "1.9",
+          "date": "2026-10-02",
+          "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.9/PolarPanel_v1_9.ipa",
+          "size": 3240637
+        },
+        {
           "version": "1.8",
           "date": "2026-08-20",
           "downloadURL": "https://github.com/r-hasegawa/Polar360Panel/releases/download/v1.8/PolarPanel_v1_8.ipa",

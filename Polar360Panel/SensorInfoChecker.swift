@@ -49,6 +49,7 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
         isConnected = false
         pairingErrorOccurred = false
         batteryLevel = nil
+        PolarManager.shared.clearFirmwareVersion(for: deviceId)
 
         PolarManager.shared.register(slot: self, forDeviceId: deviceId)
 
@@ -96,6 +97,14 @@ final class SensorInfoChecker: ObservableObject, PolarDeviceEventReceiver {
 
     private func gatherInfo(deviceId: String) async {
         var lines: [String] = []
+
+        // ファームウェアバージョンは接続時にSDKがDISを読んで通知してくる(PolarManagerが保持)。
+        if await waitUntil(timeoutSeconds: 5, condition: { PolarManager.shared.firmwareVersion(for: deviceId) != nil }),
+           let firmware = PolarManager.shared.firmwareVersion(for: deviceId) {
+            lines.append("ファームウェア: \(firmware)")
+        } else {
+            lines.append("ファームウェア: 取得できず")
+        }
 
         if let rssi = try? api.getRSSIValue(deviceId) {
             lines.append("RSSI: \(rssi) dBm")

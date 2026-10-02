@@ -24,6 +24,7 @@
 		50A05BCF301AD92A006E93DF /* SensorInfoChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BCE301AD92A006E93DF /* SensorInfoChecker.swift */; };
 		50A05BD1301AD99A006E93DF /* LastMeasurementSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BD0301AD99A006E93DF /* LastMeasurementSettingsStore.swift */; };
 		50A05BD3301AE64A006E93DF /* SensorMemoryEraser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BD2301AE64A006E93DF /* SensorMemoryEraser.swift */; };
+		50A05BF1301AE64A006E93DF /* SensorFirmwareUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50A05BF0301AE64A006E93DF /* SensorFirmwareUpdater.swift */; };
 		50C877B0301272AF00C7C0CB /* Polar360PanelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C877AF301272AF00C7C0CB /* Polar360PanelApp.swift */; };
 		50C877B2301272AF00C7C0CB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C877B1301272AF00C7C0CB /* ContentView.swift */; };
 		50C877B4301272B100C7C0CB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 50C877B3301272B100C7C0CB /* Assets.xcassets */; };
@@ -49,6 +50,7 @@
 		50A05BCE301AD92A006E93DF /* SensorInfoChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorInfoChecker.swift; sourceTree = "<group>"; };
 		50A05BD0301AD99A006E93DF /* LastMeasurementSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastMeasurementSettingsStore.swift; sourceTree = "<group>"; };
 		50A05BD2301AE64A006E93DF /* SensorMemoryEraser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorMemoryEraser.swift; sourceTree = "<group>"; };
+		50A05BF0301AE64A006E93DF /* SensorFirmwareUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorFirmwareUpdater.swift; sourceTree = "<group>"; };
 		50C877AC301272AF00C7C0CB /* Polar360Panel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Polar360Panel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		50C877AF301272AF00C7C0CB /* Polar360PanelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Polar360PanelApp.swift; sourceTree = "<group>"; };
 		50C877B1301272AF00C7C0CB /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -125,6 +127,7 @@
 				50A05BCE301AD92A006E93DF /* SensorInfoChecker.swift */,
 				50A05BD0301AD99A006E93DF /* LastMeasurementSettingsStore.swift */,
 				50A05BD2301AE64A006E93DF /* SensorMemoryEraser.swift */,
+				50A05BF0301AE64A006E93DF /* SensorFirmwareUpdater.swift */,
 			);
 			path = Polar360Panel;
 			sourceTree = "<group>";
@@ -221,6 +224,7 @@
 				50C877C43012759A00C7C0CB /* PolarManager.swift in Sources */,
 				50C877C53012759A00C7C0CB /* CsvLogger.swift in Sources */,
 				50A05BD3301AE64A006E93DF /* SensorMemoryEraser.swift in Sources */,
+				50A05BF1301AE64A006E93DF /* SensorFirmwareUpdater.swift in Sources */,
 				50C877C73012759A00C7C0CB /* OfflineSensorPanelView.swift in Sources */,
 				50A05BBD30172F38006E93DF /* OfflineDashboardView.swift in Sources */,
 				50A05BBB30172F24006E93DF /* OnlineDashboardView.swift in Sources */,

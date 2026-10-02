@@ -24,6 +24,11 @@ final class PolarManager: NSObject, ObservableObject,
 
     private var scanTask: Task<Void, Never>?
 
+    // deviceId -> DIS(Device Information Service)から届いたファームウェアバージョン。
+    // DISは接続のたびにSDKが読み直して通知してくるので、接続前にclearしておけば
+    // 「今回の接続で読んだ値」かどうかを区別できる。
+    private var firmwareVersions: [String: String] = [:]
+
     private override init() {
         api = PolarBleApiDefaultImpl.polarImplementation(
             DispatchQueue.main,
@@ -34,7 +39,8 @@ final class PolarManager: NSObject, ObservableObject,
                 .feature_polar_online_streaming,
                 .feature_polar_offline_recording,
                 .feature_polar_device_time_setup,
-                .feature_polar_device_control
+                .feature_polar_device_control,
+                .feature_polar_firmware_update
             ]
         )
         super.init()
@@ -59,6 +65,16 @@ final class PolarManager: NSObject, ObservableObject,
     /// 安全確認に使う。
     func isDeviceActive(_ deviceId: String) -> Bool {
         slots[deviceId] != nil
+    }
+
+    // MARK: - ファームウェアバージョン
+
+    func firmwareVersion(for deviceId: String) -> String? {
+        firmwareVersions[deviceId]
+    }
+
+    func clearFirmwareVersion(for deviceId: String) {
+        firmwareVersions[deviceId] = nil
     }
 
     // MARK: - スキャン
@@ -145,7 +161,12 @@ final class PolarManager: NSObject, ObservableObject,
     }
 
     func disInformationReceivedWithKeysAsStrings(_ identifier: String, key: String, value: String) {
-        // 今回は未使用
+        // 2A26 = Firmware Revision String。センサー管理画面の情報表示・FW更新後の確認に使う。
+        guard key.uppercased() == "2A26" else { return }
+        let version = value.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+        DispatchQueue.main.async { [weak self] in
+            self?.firmwareVersions[identifier] = version
+        }
     }
 
     // MARK: - PolarBleApiDeviceFeaturesObserver

@@ -43,6 +43,7 @@ Xcodeへの組み込み手順は [SETUP.md](./SETUP.md) を参照してくださ
 | `PolarManager.swift` | PolarBleApiの共有・コールバックの振り分け |
 | `CsvLogger.swift` | CSV書き出し(センサーID・セッション単位でファイル分割) |
 | `SensorNicknameStore.swift` / `SensorManagementView.swift` | センサーの名前管理 |
+| `SensorFirmwareUpdater.swift` | センサーのファームウェア確認・更新(センサー管理 →「情報」→「FW更新」) |
 | `DataFileScanner.swift` / `CsvDataLoader.swift` / `DataManagementView.swift` / `StoredDataGraphView.swift` | 保存済みデータの閲覧・削除・グラフ表示 |
 | `UsageGuideView.swift` | アプリの使い方・制約の解説画面 |
 

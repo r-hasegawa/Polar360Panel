@@ -149,6 +149,8 @@ private struct SensorNicknameRow: View {
     @ObservedObject private var store = SensorNicknameStore.shared
     @StateObject private var infoChecker = SensorInfoChecker()
     @StateObject private var memoryEraser = SensorMemoryEraser()
+    @StateObject private var firmwareUpdater = SensorFirmwareUpdater()
+    @State private var showFirmwareSheet = false
     @State private var editingName: String = ""
     @State private var showRenameAlert = false
     @State private var showActiveWarning = false
@@ -172,7 +174,7 @@ private struct SensorNicknameRow: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if infoChecker.isChecking || memoryEraser.isErasing {
+            if infoChecker.isChecking || memoryEraser.isErasing || firmwareUpdater.isBusy {
                 ProgressView().scaleEffect(0.8)
             }
         }
@@ -247,12 +249,18 @@ private struct SensorNicknameRow: View {
         }
         .alert("センサー情報", isPresented: $showInfoDialog) {
             Button("OK") {}
+            if infoChecker.errorText == nil {
+                Button("FW更新") { showFirmwareSheet = true }
+            }
         } message: {
             if let error = infoChecker.errorText {
                 Text(error)
             } else {
                 Text(infoChecker.resultLines.joined(separator: "\n"))
             }
+        }
+        .sheet(isPresented: $showFirmwareSheet, onDismiss: { firmwareUpdater.reset() }) {
+            FirmwareUpdateSheet(deviceId: deviceId, updater: firmwareUpdater)
         }
         .alert("センサー内蔵メモリを削除しますか?", isPresented: $showEraseConfirm1) {
             Button("キャンセル", role: .cancel) {}
@@ -287,5 +295,123 @@ private struct SensorNicknameRow: View {
         if !succeeded {
             showActiveWarning = true
         }
+    }
+}
+
+/// 「FW更新」から開くシート。開いた時点で最新版を問い合わせ、結果に応じて
+/// 「最新です」表示 / 更新の確認 / 進捗 / 完了(再接続でのバージョン確認結果)を表示する。
+private struct FirmwareUpdateSheet: View {
+    let deviceId: String
+    @ObservedObject var updater: SensorFirmwareUpdater
+    @ObservedObject private var store = SensorNicknameStore.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Text(store.displayName(for: deviceId))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                content
+            }
+            .multilineTextAlignment(.center)
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("ファームウェア更新")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    if !updater.isBusy {
+                        Button("閉じる") { dismiss() }
+                    }
+                }
+            }
+        }
+        // 更新中にスワイプで閉じてしまわないようにする
+        .interactiveDismissDisabled(updater.isBusy)
+        .task {
+            if updater.phase == .idle {
+                await updater.checkForUpdate(deviceId: deviceId)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch updater.phase {
+        case .idle, .checking:
+            ProgressView("最新版を問い合わせ中…")
+
+        case .upToDate(let current):
+            resultIcon("checkmark.seal.fill", color: .green)
+            Text("最新のファームウェアです")
+                .font(.title3).bold()
+            Text("現在のバージョン: \(current ?? "不明")")
+                .foregroundColor(.secondary)
+
+        case .available(let current, let latest):
+            resultIcon("arrow.down.circle.fill", color: .blue)
+            Text("新しいファームウェアがあります")
+                .font(.title3).bold()
+            Text("\(current ?? "不明") → \(latest)")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("・更新には数分かかります。完了までセンサーをiPadの近くに置き、アプリを終了しないでください。")
+                Text("・更新の途中でセンサーは一度初期化されます(ペアリングは維持されます)。内蔵メモリに未取得の記録がある場合は更新を中止します。")
+                Text("・更新後、計測パネルで最初に接続した時に初期設定(FTU)が自動でやり直されます。")
+                Text("・バッテリー残量が\(SensorFirmwareUpdater.minimumBatteryPercent)%未満の場合は更新できません。")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: 480)
+            Button {
+                Task { await updater.performUpdate(deviceId: deviceId, expectedVersion: latest) }
+            } label: {
+                Text("更新する").frame(minWidth: 160)
+            }
+            .buttonStyle(.borderedProminent)
+
+        case .updating(let step, let detail, let percent):
+            if let percent {
+                ProgressView(value: Double(percent), total: 100) {
+                    Text(step)
+                } currentValueLabel: {
+                    Text("\(percent)%")
+                }
+                .frame(maxWidth: 360)
+            } else {
+                ProgressView(step)
+            }
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Text("完了するまでセンサーをiPadの近くに置き、アプリを終了しないでください。")
+                .font(.caption)
+                .foregroundColor(.orange)
+
+        case .verifying:
+            ProgressView("再接続してバージョンを確認中…")
+
+        case .completed(let message):
+            resultIcon("checkmark.circle.fill", color: .green)
+            Text("更新完了")
+                .font(.title3).bold()
+            Text(message)
+
+        case .failed(let message):
+            resultIcon("exclamationmark.triangle.fill", color: .red)
+            Text("ファームウェア更新できませんでした")
+                .font(.title3).bold()
+            Text(message)
+        }
+    }
+
+    private func resultIcon(_ systemName: String, color: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 48))
+            .foregroundColor(color)
     }
 }
